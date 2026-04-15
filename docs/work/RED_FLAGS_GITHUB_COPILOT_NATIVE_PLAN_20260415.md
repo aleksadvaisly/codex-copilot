@@ -4,45 +4,46 @@
 
 # Iteration: 1
 
-# Review score: convergence=0.10
+# Review score: convergence=0.60
 
 ## 1. Scope Reduction / Requirement Non-Compliance
 
-The new built-in provider is registered, but it is not yet usable as a native Copilot feature. The spec requires native auth, model discovery and working runtime turns, while the code currently only adds provider metadata.
+The standard runtime request path is now wired for Copilot, but the spec still requires proving that a normal coding turn works end to end. The code has no live Copilot streamed-turn test or captured SSE fixture for a real Copilot turn yet.
 
 Evidence:
 
-- Spec requires native auth and model discovery: `docs/work/GITHUB_COPILOT_NATIVE_PLAN.md:15-25`, `docs/work/GITHUB_COPILOT_NATIVE_PLAN.md:492-500`
-- Current implementation only registers provider metadata: `codex-rs/model-provider-info/src/lib.rs:299-317`, `codex-rs/model-provider-info/src/lib.rs:339-347`
-- TUI still exposes a placeholder Copilot sign-in path: `codex-rs/tui/src/onboarding/auth.rs:105`
+- Acceptance criteria still require a standard coding turn over the normal runtime path: `docs/work/GITHUB_COPILOT_NATIVE_PLAN.md:496-502`
+- Testing plan explicitly calls for one streamed text turn: `docs/work/GITHUB_COPILOT_NATIVE_PLAN.md:446-452`
+- Current runtime work resolves Copilot provider access in shared setup, but only local unit and crate tests were run: `codex-rs/core/src/client.rs:662-671`, `codex-rs/cli/src/responses_cmd.rs:35`
 
 Severity: HIGH
-Impact: Users can eventually select a built-in `github-copilot` provider identity, but they still cannot authenticate and use Copilot natively.
+Impact: The implementation may still fail against live Copilot Responses streaming even though the local abstraction and crate tests pass.
 
 ## 2. Lack of Algorithm Grounding
 
-There is still no tested implementation for the hard parts identified by the spec: device auth, token lifecycle, `/models` parsing and request customization.
+The Copilot runtime provider resolution falls back to `load_github_copilot_session(...)` when `api_base_url` is missing from stored auth, but there is no direct test proving that fallback path updates both base URL and bearer correctly under a stale old-format auth file.
 
 Evidence:
 
-- Required unit tests are listed in the spec: `docs/work/GITHUB_COPILOT_NATIVE_PLAN.md:438-445`
-- The only new tests added in this iteration are provider-registration tests: `codex-rs/model-provider-info/src/model_provider_info_tests.rs:181-204`, `codex-rs/config/src/config_toml.rs:801-821`
+- Fallback logic is in `codex-rs/login/src/provider_auth.rs:71-90`
+- Backward-compatible stored auth shape is introduced in `codex-rs/login/src/copilot_storage.rs:13-19`
+- The only new runtime test covers the stored `api_base_url` fast path, not the refresh fallback path: `codex-rs/core/src/client_tests.rs:185-225`
 
 Severity: MEDIUM
-Impact: The riskiest Copilot-specific logic remains unproven, so most feature risk is still ahead.
+Impact: Older Copilot auth files or partially migrated sessions may still exercise an unproven path during the first runtime request.
 
 ## 3. Implicit Logic Changes / Hidden Simplifications
 
-The built-in Copilot provider uses a fixed base URL and disables websockets without a verified upstream contract. That is acceptable for an MVP registration slice, but it is still a policy choice rather than a proven compatibility guarantee.
+Copilot request customization is currently implemented by encoding static IDE headers into the built-in provider definition and resolving the dynamic base URL in shared provider setup. That is smaller than a dedicated request hook, but it also assumes the same header set is valid for normal Responses turns, not just `/models`.
 
 Evidence:
 
-- Fixed base URL and websocket default: `codex-rs/model-provider-info/src/lib.rs:37-38`, `codex-rs/model-provider-info/src/lib.rs:299-317`
-- The spec explicitly says websocket support should be validated and disabled only if messy: `docs/work/GITHUB_COPILOT_NATIVE_PLAN.md:397-407`
+- Static Copilot IDE headers are now baked into built-in provider metadata: `codex-rs/model-provider-info/src/lib.rs:317-340`
+- The spec called out a provider-specific request customization hook only if needed and warned that request differences may extend beyond static headers: `docs/work/GITHUB_COPILOT_NATIVE_PLAN.md:386-407`
 
 Severity: MEDIUM
-Impact: If Copilot requires a different base path or benefits from websocket transport, later runtime work may need to revise these defaults.
+Impact: If live Copilot turn requests require different or additional headers than `/models`, this implementation will need another runtime seam instead of just provider metadata.
 
 ## Recommendation
 
-Accept this iteration only as groundwork. It is a correct low-risk first slice, but it is not close to feature-complete native Copilot support. The next blocking implementation step is native Copilot auth with persisted token storage and runtime retrieval.
+Accept this slice as real progress. Native auth, model discovery and the shared standard-turn runtime path are now connected. Do not call the feature done yet. The next blocking step is live validation of one normal streamed Copilot turn, followed by tests or fixtures that prove the request header policy and fallback refresh path under real runtime conditions.

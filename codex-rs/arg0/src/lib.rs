@@ -7,11 +7,13 @@ use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
+use dirs::home_dir;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
 const APPLY_PATCH_ARG0: &str = "apply_patch";
+const COPILOT_ARG0: &str = "copilot";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
@@ -134,6 +136,8 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
         std::process::exit(exit_code);
     }
 
+    maybe_set_copilot_home(exe_name);
+
     // This modifies the environment, which is not thread-safe, so do this
     // before creating any threads/the Tokio runtime.
     load_dotenv();
@@ -147,6 +151,19 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
             None
         }
     }
+}
+
+fn maybe_set_copilot_home(exe_name: &str) {
+    if exe_name != COPILOT_ARG0 || std::env::var_os("CODEX_HOME").is_some() {
+        return;
+    }
+
+    let Some(mut home) = home_dir() else {
+        return;
+    };
+    home.push(".codex-copilot");
+
+    unsafe { std::env::set_var("CODEX_HOME", home) };
 }
 
 /// While we want to deploy the Codex CLI as a single executable for simplicity,
@@ -439,9 +456,12 @@ fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
 mod tests {
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
+    use super::COPILOT_ARG0;
     use super::LOCK_FILENAME;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
+    use super::maybe_set_copilot_home;
+    use dirs::home_dir;
     use std::fs;
     use std::fs::File;
     use std::path::Path;
@@ -517,5 +537,22 @@ mod tests {
 
         assert!(!dir.exists());
         Ok(())
+    }
+
+    #[test]
+    fn maybe_set_copilot_home_sets_default_codex_home() {
+        unsafe {
+            std::env::remove_var("CODEX_HOME");
+        }
+
+        maybe_set_copilot_home(COPILOT_ARG0);
+
+        let mut expected = home_dir().expect("home dir");
+        expected.push(".codex-copilot");
+        assert_eq!(std::env::var_os("CODEX_HOME"), Some(expected.into()));
+
+        unsafe {
+            std::env::remove_var("CODEX_HOME");
+        }
     }
 }

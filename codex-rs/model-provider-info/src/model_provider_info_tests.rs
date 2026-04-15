@@ -201,4 +201,18 @@ fn test_built_in_github_copilot_provider_metadata() {
     assert!(!provider.requires_openai_auth);
     assert!(!provider.supports_websockets);
     assert_eq!(provider.auth, None);
+    let http_headers = provider
+        .http_headers
+        .as_ref()
+        .expect("github-copilot provider should include required IDE headers");
+    assert_eq!(
+        http_headers.get("Editor-Version").map(String::as_str),
+        Some("Vim/9.1.1752")
+    );
+    assert_eq!(
+        http_headers
+            .get("Copilot-Integration-Id")
+            .map(String::as_str),
+        Some("vscode-chat")
+    );
 }

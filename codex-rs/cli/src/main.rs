@@ -37,6 +37,7 @@ use supports_color::Stream;
 
 const DEFAULT_BIN_NAME: &str = "codex";
 const GITHUB_COPILOT_BIN_NAME: &str = "copilot";
+const GITHUB_COPILOT_PROVIDER_ID: &str = "github-copilot";
 
 fn invoked_bin_name() -> String {
     std::env::args_os()
@@ -679,6 +680,16 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
+    if invoked_provider_id() == Some(GITHUB_COPILOT_PROVIDER_ID)
+        && !root_config_overrides
+            .raw_overrides
+            .iter()
+            .any(|override_arg| override_arg.starts_with("model_provider="))
+    {
+        root_config_overrides
+            .raw_overrides
+            .push(format!("model_provider={GITHUB_COPILOT_PROVIDER_ID}"));
+    }
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
 

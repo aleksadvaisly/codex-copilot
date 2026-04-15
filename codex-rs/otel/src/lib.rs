@@ -45,6 +45,7 @@ pub enum ToolDecisionSource {
 pub enum TelemetryAuthMode {
     ApiKey,
     Chatgpt,
+    GithubCopilot,
 }
 
 impl From<codex_app_server_protocol::AuthMode> for TelemetryAuthMode {
@@ -53,6 +54,7 @@ impl From<codex_app_server_protocol::AuthMode> for TelemetryAuthMode {
             codex_app_server_protocol::AuthMode::ApiKey => Self::ApiKey,
             codex_app_server_protocol::AuthMode::Chatgpt
             | codex_app_server_protocol::AuthMode::ChatgptAuthTokens => Self::Chatgpt,
+            codex_app_server_protocol::AuthMode::GithubCopilot => Self::GithubCopilot,
         }
     }
 }

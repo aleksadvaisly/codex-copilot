@@ -43,6 +43,7 @@ use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
+use codex_model_provider_info::GITHUB_COPILOT_PROVIDER_ID;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
@@ -1087,7 +1088,9 @@ async fn run_ratatui_app(
 
     let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
     let mut trust_decision_was_made = false;
-    let login_status = if initial_config.model_provider.requires_openai_auth {
+    let login_status = if initial_config.model_provider.requires_openai_auth
+        || initial_config.model_provider_id == GITHUB_COPILOT_PROVIDER_ID
+    {
         let Some(app_server) = app_server.as_mut() else {
             unreachable!("app server should exist when auth is required");
         };
@@ -1657,7 +1660,9 @@ async fn get_login_status(
     app_server: &mut AppServerSession,
     config: &Config,
 ) -> color_eyre::Result<LoginStatus> {
-    if !config.model_provider.requires_openai_auth {
+    if !config.model_provider.requires_openai_auth
+        && config.model_provider_id != GITHUB_COPILOT_PROVIDER_ID
+    {
         return Ok(LoginStatus::NotAuthenticated);
     }
 
@@ -1665,6 +1670,9 @@ async fn get_login_status(
     Ok(match account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
         Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
+        Some(AppServerAccount::GithubCopilot {}) => {
+            LoginStatus::AuthMode(AppServerAuthMode::GithubCopilot)
+        }
         None => LoginStatus::NotAuthenticated,
     })
 }
@@ -1726,7 +1734,9 @@ fn should_show_onboarding(
 fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
     // Only show the login screen for providers that actually require OpenAI auth
     // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
-    if !config.model_provider.requires_openai_auth {
+    if !config.model_provider.requires_openai_auth
+        && config.model_provider_id != GITHUB_COPILOT_PROVIDER_ID
+    {
         return false;
     }
 

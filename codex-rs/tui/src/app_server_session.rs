@@ -210,6 +210,11 @@ impl AppServerSession {
         let default_model = config
             .model
             .clone()
+            .filter(|configured| {
+                available_models
+                    .iter()
+                    .any(|model| model.model == *configured)
+            })
             .or_else(|| {
                 available_models
                     .iter()
@@ -253,6 +258,14 @@ impl AppServerSession {
                     true,
                 )
             }
+            Some(Account::GithubCopilot {}) => (
+                None,
+                Some(TelemetryAuthMode::GithubCopilot),
+                Some(StatusAccountDisplay::GitHubCopilot),
+                None,
+                FeedbackAudience::External,
+                true,
+            ),
             None => (None, None, None, None, FeedbackAudience::External, false),
         };
         Ok(AppServerBootstrap {
@@ -812,6 +825,7 @@ pub(crate) fn status_account_display_from_auth_mode(
                 plan: plan_type.map(plan_type_display_name),
             })
         }
+        Some(AuthMode::GithubCopilot) => Some(StatusAccountDisplay::GitHubCopilot),
         None => None,
     }
 }

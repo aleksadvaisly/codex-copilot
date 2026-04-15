@@ -80,8 +80,21 @@ struct GitHubCopilotTokenEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct GitHubCopilotTokenResponse {
+    endpoints: Option<GitHubCopilotEndpoints>,
     token: String,
     expires_at: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubCopilotEndpoints {
+    api: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitHubCopilotSession {
+    pub api_base_url: String,
+    pub access_token: String,
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 impl GitHubCopilotAuthProvider {
@@ -97,8 +110,9 @@ impl GitHubCopilotAuthProvider {
             .ok_or_else(|| std::io::Error::other("GitHub Copilot is not logged in."))?;
         let refreshed = exchange_copilot_token(&self.client, &stored.github_access_token).await?;
         let auth = GitHubCopilotAuth {
+            api_base_url: Some(refreshed.api_base_url),
             github_access_token: stored.github_access_token,
-            copilot_access_token: refreshed.token,
+            copilot_access_token: refreshed.access_token,
             copilot_token_expires_at: refreshed.expires_at,
         };
         save_github_copilot_auth(&self.codex_home, &auth)?;
@@ -189,8 +203,25 @@ pub async fn run_github_copilot_device_code_login(codex_home: &Path) -> std::io:
     let github_access_token = poll_github_access_token(&client, &device_code).await?;
     let copilot = exchange_copilot_token(&client, &github_access_token).await?;
     let auth = GitHubCopilotAuth {
+        api_base_url: Some(copilot.api_base_url),
         github_access_token,
-        copilot_access_token: copilot.token,
+        copilot_access_token: copilot.access_token,
+        copilot_token_expires_at: copilot.expires_at,
+    };
+    save_github_copilot_auth(codex_home, &auth)
+}
+
+pub async fn complete_github_copilot_device_code_login(
+    codex_home: &Path,
+    device_code: GitHubCopilotDeviceCode,
+) -> std::io::Result<()> {
+    let client = build_reqwest_client();
+    let github_access_token = poll_github_access_token(&client, &device_code).await?;
+    let copilot = exchange_copilot_token(&client, &github_access_token).await?;
+    let auth = GitHubCopilotAuth {
+        api_base_url: Some(copilot.api_base_url),
+        github_access_token,
+        copilot_access_token: copilot.access_token,
         copilot_token_expires_at: copilot.expires_at,
     };
     save_github_copilot_auth(codex_home, &auth)
@@ -198,6 +229,27 @@ pub async fn run_github_copilot_device_code_login(codex_home: &Path) -> std::io:
 
 pub fn logout_github_copilot(codex_home: &Path) -> std::io::Result<bool> {
     delete_github_copilot_auth(codex_home)
+}
+
+pub async fn load_github_copilot_session(
+    codex_home: &Path,
+) -> std::io::Result<Option<GitHubCopilotSession>> {
+    let stored = match load_github_copilot_auth(codex_home)? {
+        Some(stored) => stored,
+        None => return Ok(None),
+    };
+
+    let refreshed =
+        exchange_copilot_token(&build_reqwest_client(), &stored.github_access_token).await?;
+    let auth = GitHubCopilotAuth {
+        api_base_url: Some(refreshed.api_base_url.clone()),
+        github_access_token: stored.github_access_token,
+        copilot_access_token: refreshed.access_token.clone(),
+        copilot_token_expires_at: refreshed.expires_at,
+    };
+    save_github_copilot_auth(codex_home, &auth)?;
+
+    Ok(Some(refreshed))
 }
 
 impl AuthManager {
@@ -285,7 +337,7 @@ async fn poll_github_access_token(
 async fn exchange_copilot_token(
     client: &reqwest::Client,
     github_access_token: &str,
-) -> std::io::Result<CopilotTokenResult> {
+) -> std::io::Result<GitHubCopilotSession> {
     let response = client
         .get(GITHUB_COPILOT_TOKEN_URL)
         .header("Accept", "application/json")
@@ -313,6 +365,7 @@ async fn exchange_copilot_token(
         .or_else(|_| {
             serde_json::from_str::<GitHubCopilotTokenEnvelope>(&body).map(|token| {
                 GitHubCopilotTokenResponse {
+                    endpoints: None,
                     token: token.token,
                     expires_at: None,
                 }
@@ -325,8 +378,14 @@ async fn exchange_copilot_token(
         .and_then(|expires_at| DateTime::<Utc>::from_timestamp(expires_at as i64, 0))
         .or_else(|| parse_jwt_expiration(&token_response.token).ok().flatten());
 
-    Ok(CopilotTokenResult {
-        token: token_response.token,
+    let api_base_url = token_response
+        .endpoints
+        .and_then(|endpoints| endpoints.api)
+        .unwrap_or_else(|| "https://api.githubcopilot.com".to_string());
+
+    Ok(GitHubCopilotSession {
+        api_base_url,
+        access_token: token_response.token,
         expires_at,
     })
 }
@@ -336,9 +395,4 @@ fn print_github_copilot_device_code_prompt(device_code: &GitHubCopilotDeviceCode
         "\nSign in with GitHub Copilot:\n\n1. Open this URL in your browser\n   {}\n\n2. Enter this code\n   {}\n",
         device_code.verification_uri, device_code.user_code
     );
-}
-
-struct CopilotTokenResult {
-    token: String,
-    expires_at: Option<DateTime<Utc>>,
 }

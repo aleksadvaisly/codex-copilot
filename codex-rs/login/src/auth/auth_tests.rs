@@ -354,6 +354,7 @@ async fn native_github_copilot_auth_manager_uses_stored_token() {
     save_github_copilot_auth(
         codex_home.path(),
         &GitHubCopilotAuth {
+            api_base_url: Some("https://api.githubcopilot.com".to_string()),
             github_access_token: "ghu_test".to_string(),
             copilot_access_token: "copilot-token".to_string(),
             copilot_token_expires_at: None,

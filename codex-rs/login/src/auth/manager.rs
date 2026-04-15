@@ -24,6 +24,9 @@ pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
+use crate::copilot_storage::GitHubCopilotAuth;
+use crate::copilot_storage::delete_github_copilot_auth;
+use crate::copilot_storage::load_github_copilot_auth;
 use crate::default_client::create_client;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
@@ -44,6 +47,7 @@ pub enum CodexAuth {
     ApiKey(ApiKeyAuth),
     Chatgpt(ChatgptAuth),
     ChatgptAuthTokens(ChatgptAuthTokens),
+    GithubCopilot(GitHubCopilotAuth),
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +213,11 @@ impl CodexAuth {
                 let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
+            ApiAuthMode::GithubCopilot => {
+                let copilot = crate::copilot_storage::load_github_copilot_auth(codex_home)?
+                    .ok_or_else(|| std::io::Error::other("GitHub Copilot auth is missing."))?;
+                Ok(Self::GithubCopilot(copilot))
+            }
             ApiAuthMode::ChatgptAuthTokens => {
                 Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
             }
@@ -231,6 +240,7 @@ impl CodexAuth {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
             Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
+            Self::GithubCopilot(_) => AuthMode::GithubCopilot,
         }
     }
 
@@ -239,6 +249,7 @@ impl CodexAuth {
             Self::ApiKey(_) => ApiAuthMode::ApiKey,
             Self::Chatgpt(_) => ApiAuthMode::Chatgpt,
             Self::ChatgptAuthTokens(_) => ApiAuthMode::ChatgptAuthTokens,
+            Self::GithubCopilot(_) => ApiAuthMode::GithubCopilot,
         }
     }
 
@@ -258,7 +269,7 @@ impl CodexAuth {
     pub fn api_key(&self) -> Option<&str> {
         match self {
             Self::ApiKey(auth) => Some(auth.api_key.as_str()),
-            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => None,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) | Self::GithubCopilot(_) => None,
         }
     }
 
@@ -283,6 +294,7 @@ impl CodexAuth {
                 let access_token = self.get_token_data()?.access_token;
                 Ok(access_token)
             }
+            Self::GithubCopilot(auth) => Ok(auth.copilot_access_token.clone()),
         }
     }
 
@@ -341,6 +353,7 @@ impl CodexAuth {
         let state = match self {
             Self::Chatgpt(auth) => &auth.state,
             Self::ChatgptAuthTokens(auth) => &auth.state,
+            Self::GithubCopilot(_) => return None,
             Self::ApiKey(_) => return None,
         };
         #[expect(clippy::unwrap_used)]
@@ -508,6 +521,10 @@ pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
             (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
             (ForcedLoginMethod::Chatgpt, AuthMode::Chatgpt)
             | (ForcedLoginMethod::Chatgpt, AuthMode::ChatgptAuthTokens) => None,
+            (ForcedLoginMethod::Api, AuthMode::GithubCopilot)
+            | (ForcedLoginMethod::Chatgpt, AuthMode::GithubCopilot) => {
+                Some("The selected login method does not match the current provider.".to_string())
+            }
             (ForcedLoginMethod::Api, AuthMode::Chatgpt)
             | (ForcedLoginMethod::Api, AuthMode::ChatgptAuthTokens) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
@@ -578,7 +595,7 @@ fn logout_with_message(
     let removal_result = logout_all_stores(codex_home, auth_credentials_store_mode);
     let error_message = match removal_result {
         Ok(_) => message,
-        Err(err) => format!("{message}. Failed to remove auth.json: {err}"),
+        Err(err) => format!("{message}. Failed to remove auth data: {err}"),
     };
     Err(std::io::Error::other(error_message))
 }
@@ -588,11 +605,13 @@ fn logout_all_stores(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
     if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
-        return logout(codex_home, AuthCredentialsStoreMode::Ephemeral);
+        let removed_copilot = delete_github_copilot_auth(codex_home)?;
+        return Ok(logout(codex_home, AuthCredentialsStoreMode::Ephemeral)? || removed_copilot);
     }
     let removed_ephemeral = logout(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
     let removed_managed = logout(codex_home, auth_credentials_store_mode)?;
-    Ok(removed_ephemeral || removed_managed)
+    let removed_copilot = delete_github_copilot_auth(codex_home)?;
+    Ok(removed_ephemeral || removed_managed || removed_copilot)
 }
 
 fn load_auth(
@@ -607,6 +626,10 @@ fn load_auth(
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
         return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
+    }
+
+    if let Some(copilot_auth) = load_github_copilot_auth(codex_home)? {
+        return Ok(Some(CodexAuth::GithubCopilot(copilot_auth)));
     }
 
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
@@ -1409,6 +1432,12 @@ impl AuthManager {
             .is_some_and(CodexAuth::is_external_chatgpt_tokens)
     }
 
+    pub fn is_github_copilot_auth_active(&self) -> bool {
+        self.auth_cached()
+            .as_ref()
+            .is_some_and(|auth| matches!(auth, CodexAuth::GithubCopilot(_)))
+    }
+
     pub fn codex_api_key_env_enabled(&self) -> bool {
         self.enable_codex_api_key_env
     }
@@ -1546,6 +1575,7 @@ impl AuthManager {
                 self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
                     .await
             }
+            CodexAuth::GithubCopilot(_) => Ok(()),
             CodexAuth::ApiKey(_) => Ok(()),
         };
         if let Err(RefreshTokenError::Permanent(error)) = &result {

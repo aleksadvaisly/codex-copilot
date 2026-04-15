@@ -1196,6 +1196,22 @@
           "properties": {
             "type": {
               "enum": [
+                "githubCopilot"
+              ],
+              "title": "GithubCopilotLoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "GithubCopilotLoginAccountParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
                 "chatgptDeviceCode"
               ],
               "title": "ChatgptDeviceCodeLoginAccountParamsType",

@@ -105,10 +105,10 @@ use codex_api::CoreAuthProvider;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
-use codex_login::api_bridge::auth_provider_from_auth;
 use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::provider_auth::auth_manager_for_provider;
+use codex_login::resolve_provider_api_access;
 #[cfg(test)]
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
@@ -660,19 +660,13 @@ impl ModelClient {
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        let auth = match self.state.auth_manager.as_ref() {
-            Some(manager) => manager.auth().await,
-            None => None,
-        };
-        let api_provider = self
-            .state
-            .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        let resolved =
+            resolve_provider_api_access(self.state.auth_manager.clone(), &self.state.provider)
+                .await?;
         Ok(CurrentClientSetup {
-            auth,
-            api_provider,
-            api_auth,
+            auth: resolved.auth,
+            api_provider: resolved.api_provider,
+            api_auth: resolved.api_auth,
         })
     }
 
@@ -1696,6 +1690,7 @@ impl AuthRequestTelemetryContext {
             auth_mode: auth_mode.map(|mode| match mode {
                 AuthMode::ApiKey => "ApiKey",
                 AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => "Chatgpt",
+                AuthMode::GithubCopilot => "GithubCopilot",
             }),
             auth_header_attached: api_auth.auth_header_attached(),
             auth_header_name: api_auth.auth_header_name(),

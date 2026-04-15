@@ -873,3 +873,21 @@ fn bundled_models_json_roundtrips() {
         "bundled models.json should contain at least one model"
     );
 }
+
+#[test]
+fn cache_filename_is_provider_specific_for_github_copilot() {
+    let default_provider = provider_for("https://example.test".to_string());
+    let copilot_provider = ModelProviderInfo {
+        name: "GitHub Copilot".into(),
+        ..provider_for("https://api.githubcopilot.com".to_string())
+    };
+
+    assert_eq!(
+        cache_filename_for_provider(&default_provider),
+        MODEL_CACHE_FILE
+    );
+    assert_eq!(
+        cache_filename_for_provider(&copilot_provider),
+        "models_cache_github_copilot.json"
+    );
+}

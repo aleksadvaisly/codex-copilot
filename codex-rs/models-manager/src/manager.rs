@@ -1,4 +1,6 @@
 use super::cache::ModelsCacheManager;
+use super::copilot_models::CopilotModelsResponse;
+use super::copilot_models::translate_models as translate_copilot_models;
 use crate::collaboration_mode_presets::CollaborationModesConfig;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
@@ -17,7 +19,9 @@ use codex_login::CodexAuth;
 use codex_login::auth_provider_from_auth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
+use codex_login::load_github_copilot_session;
 use codex_login::required_auth_manager_for_provider;
+use codex_model_provider_info::GITHUB_COPILOT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -29,6 +33,10 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
+use reqwest::header::ACCEPT;
+use reqwest::header::AUTHORIZATION;
+use reqwest::header::HeaderMap as ReqwestHeaderMap;
+use reqwest::header::HeaderValue;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,6 +50,10 @@ use tracing::instrument;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
+const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot.vim/1.59.0";
+const COPILOT_EDITOR_VERSION: &str = "Vim/9.1.1752";
+const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+const COPILOT_LANGUAGE_SERVER_VERSION: &str = "1.408.0";
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
 #[derive(Clone)]
@@ -214,7 +226,7 @@ impl ModelsManager {
         provider: ModelProviderInfo,
     ) -> Self {
         let auth_manager = required_auth_manager_for_provider(auth_manager, &provider);
-        let cache_path = codex_home.join(MODEL_CACHE_FILE);
+        let cache_path = codex_home.join(cache_filename_for_provider(&provider));
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let catalog_mode = if model_catalog.is_some() {
             CatalogMode::Custom
@@ -396,6 +408,7 @@ impl ModelsManager {
         }
 
         if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt)
+            && !is_github_copilot_provider(&self.provider)
             && !self.provider.has_command_auth()
         {
             if matches!(
@@ -430,6 +443,10 @@ impl ModelsManager {
     }
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
+        if is_github_copilot_provider(&self.provider) {
+            return self.fetch_and_update_copilot_models().await;
+        }
+
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth_manager.auth().await;
@@ -463,6 +480,86 @@ impl ModelsManager {
         *self.etag.write().await = etag.clone();
         self.cache_manager
             .persist_cache(&models, etag, client_version)
+            .await;
+        Ok(())
+    }
+
+    async fn fetch_and_update_copilot_models(&self) -> CoreResult<()> {
+        let session = load_github_copilot_session(&self.auth_manager.codex_home())
+            .await
+            .map_err(CodexErr::Io)?
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest("GitHub Copilot is not logged in".to_string())
+            })?;
+
+        let client = build_reqwest_client();
+        let mut headers = ReqwestHeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", session.access_token))
+                .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+        );
+        headers.insert(
+            "X-GitHub-Api-Version",
+            HeaderValue::from_static("2025-10-01"),
+        );
+        headers.insert(
+            "Editor-Version",
+            HeaderValue::from_static(COPILOT_EDITOR_VERSION),
+        );
+        headers.insert(
+            "Editor-Plugin-Version",
+            HeaderValue::from_static(COPILOT_EDITOR_PLUGIN_VERSION),
+        );
+        headers.insert(
+            "Copilot-Language-Server-Version",
+            HeaderValue::from_static(COPILOT_LANGUAGE_SERVER_VERSION),
+        );
+        headers.insert(
+            "User-Agent",
+            HeaderValue::from_static("GithubCopilot/1.408.0"),
+        );
+        headers.insert(
+            "Copilot-Integration-Id",
+            HeaderValue::from_static(COPILOT_INTEGRATION_ID),
+        );
+
+        let response = timeout(
+            MODELS_REFRESH_TIMEOUT,
+            client
+                .get(format!(
+                    "{}/models",
+                    session.api_base_url.trim_end_matches('/')
+                ))
+                .headers(headers)
+                .send(),
+        )
+        .await
+        .map_err(|_| CodexErr::Timeout)?
+        .map_err(|err| CodexErr::Fatal(err.to_string()))?;
+
+        let response = response
+            .error_for_status()
+            .map_err(|err| CodexErr::Fatal(err.to_string()))?;
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        let payload = response
+            .text()
+            .await
+            .map_err(|err| CodexErr::Fatal(err.to_string()))?;
+        let models = translate_copilot_models(
+            serde_json::from_str::<CopilotModelsResponse>(&payload)
+                .map_err(|err| CodexErr::Fatal(err.to_string()))?,
+        );
+
+        self.apply_remote_models(models.clone()).await;
+        *self.etag.write().await = etag.clone();
+        self.cache_manager
+            .persist_cache(&models, etag, crate::client_version_to_whole())
             .await;
         Ok(())
     }
@@ -578,6 +675,29 @@ impl ModelsManager {
             &[]
         };
         Self::construct_model_info_from_candidates(model, candidates, config)
+    }
+}
+
+fn cache_filename_for_provider(provider: &ModelProviderInfo) -> String {
+    if is_github_copilot_provider(provider) {
+        "models_cache_github_copilot.json".to_string()
+    } else {
+        MODEL_CACHE_FILE.to_string()
+    }
+}
+
+fn is_github_copilot_provider(provider: &ModelProviderInfo) -> bool {
+    provider.name == "GitHub Copilot"
+        || provider.base_url.as_deref() == Some("https://api.githubcopilot.com")
+        || provider.base_url.as_deref() == Some("https://api.business.githubcopilot.com")
+        || provider_id_for_provider(provider) == Some(GITHUB_COPILOT_PROVIDER_ID)
+}
+
+fn provider_id_for_provider(provider: &ModelProviderInfo) -> Option<&'static str> {
+    if provider.name == "GitHub Copilot" {
+        Some(GITHUB_COPILOT_PROVIDER_ID)
+    } else {
+        None
     }
 }
 

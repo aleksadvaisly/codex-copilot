@@ -46,6 +46,22 @@
           ],
           "title": "ChatgptAccount",
           "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "githubCopilot"
+              ],
+              "title": "GithubCopilotAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "GithubCopilotAccount",
+          "type": "object"
         }
       ]
     },
@@ -703,6 +719,13 @@
           "description": "ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).",
           "enum": [
             "chatgpt"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "GitHub Copilot auth managed by Codex (tokens persisted and refreshed by Codex).",
+          "enum": [
+            "githubcopilot"
           ],
           "type": "string"
         },
@@ -5744,6 +5767,22 @@
           "properties": {
             "type": {
               "enum": [
+                "githubCopilot"
+              ],
+              "title": "GithubCopilotv2::LoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "GithubCopilotv2::LoginAccountParams",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
                 "chatgptDeviceCode"
               ],
               "title": "ChatgptDeviceCodev2::LoginAccountParamsType",
@@ -5835,6 +5874,34 @@
             "type"
           ],
           "title": "Chatgptv2::LoginAccountResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "loginId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "githubCopilot"
+              ],
+              "title": "GithubCopilotv2::LoginAccountResponseType",
+              "type": "string"
+            },
+            "userCode": {
+              "type": "string"
+            },
+            "verificationUrl": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "loginId",
+            "type",
+            "userCode",
+            "verificationUrl"
+          ],
+          "title": "GithubCopilotv2::LoginAccountResponse",
           "type": "object"
         },
         {

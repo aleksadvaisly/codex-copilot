@@ -29,6 +29,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::GitHubCopilotAuth;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
 use core_test_support::responses;
@@ -1628,6 +1629,55 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
             plan_type: AccountPlanType::Unknown,
         }),
         requires_openai_auth: true,
+    };
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_with_github_copilot() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+model_provider = "github-copilot"
+
+[features]
+shell_snapshot = false
+"#,
+    )?;
+    std::fs::write(
+        codex_home.path().join("github-copilot-auth.json"),
+        serde_json::to_string_pretty(&GitHubCopilotAuth {
+            api_base_url: Some("https://api.githubcopilot.com".to_string()),
+            github_access_token: "github-access-token".to_string(),
+            copilot_access_token: "copilot-access-token".to_string(),
+            copilot_token_expires_at: None,
+        })?,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::GithubCopilot {}),
+        requires_openai_auth: false,
     };
     assert_eq!(received, expected);
     Ok(())

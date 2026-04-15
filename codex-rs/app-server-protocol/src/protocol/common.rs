@@ -22,6 +22,8 @@ pub enum AuthMode {
     ApiKey,
     /// ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).
     Chatgpt,
+    /// GitHub Copilot auth managed by Codex (tokens persisted and refreshed by Codex).
+    GithubCopilot,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     ///
     /// ChatGPT auth tokens are supplied by an external host app and are only

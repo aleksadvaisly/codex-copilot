@@ -1618,6 +1618,10 @@ pub enum Account {
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
     Chatgpt { email: String, plan_type: PlanType },
+
+    #[serde(rename = "githubCopilot", rename_all = "camelCase")]
+    #[ts(rename = "githubCopilot", rename_all = "camelCase")]
+    GithubCopilot {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -1635,6 +1639,9 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
     Chatgpt,
+    #[serde(rename = "githubCopilot")]
+    #[ts(rename = "githubCopilot")]
+    GithubCopilot,
     #[serde(rename = "chatgptDeviceCode")]
     #[ts(rename = "chatgptDeviceCode")]
     ChatgptDeviceCode,
@@ -1674,6 +1681,13 @@ pub enum LoginAccountResponse {
         login_id: String,
         /// URL the client should open in a browser to initiate the OAuth flow.
         auth_url: String,
+    },
+    #[serde(rename = "githubCopilot", rename_all = "camelCase")]
+    #[ts(rename = "githubCopilot", rename_all = "camelCase")]
+    GithubCopilot {
+        login_id: String,
+        verification_url: String,
+        user_code: String,
     },
     #[serde(rename = "chatgptDeviceCode", rename_all = "camelCase")]
     #[ts(rename = "chatgptDeviceCode", rename_all = "camelCase")]

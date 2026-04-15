@@ -267,9 +267,11 @@ use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_login::complete_device_code_login;
+use codex_login::complete_github_copilot_device_code_login;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
+use codex_login::request_github_copilot_device_code;
 use codex_login::run_login_server;
 use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
@@ -289,6 +291,8 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+
+const GITHUB_COPILOT_PROVIDER_ID: &str = "github-copilot";
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -1185,6 +1189,9 @@ impl CodexMessageProcessor {
             LoginAccountParams::Chatgpt => {
                 self.login_chatgpt_v2(request_id).await;
             }
+            LoginAccountParams::GithubCopilot => {
+                self.login_github_copilot_v2(request_id).await;
+            }
             LoginAccountParams::ChatgptDeviceCode => {
                 self.login_chatgpt_device_code_v2(request_id).await;
             }
@@ -1449,6 +1456,108 @@ impl CodexMessageProcessor {
             },
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
+    async fn login_github_copilot_v2(&self, request_id: ConnectionRequestId) {
+        match request_github_copilot_device_code().await {
+            Ok(device_code) => {
+                let login_id = Uuid::new_v4();
+                let cancel = CancellationToken::new();
+
+                {
+                    let mut guard = self.active_login.lock().await;
+                    if let Some(existing) = guard.take() {
+                        drop(existing);
+                    }
+                    *guard = Some(ActiveLogin::DeviceCode {
+                        cancel: cancel.clone(),
+                        login_id,
+                    });
+                }
+
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        LoginAccountResponse::GithubCopilot {
+                            login_id: login_id.to_string(),
+                            verification_url: device_code.verification_uri.clone(),
+                            user_code: device_code.user_code.clone(),
+                        },
+                    )
+                    .await;
+
+                let outgoing_clone = self.outgoing.clone();
+                let active_login = self.active_login.clone();
+                let auth_manager = self.auth_manager.clone();
+                let cloud_requirements = self.cloud_requirements.clone();
+                let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+                let codex_home = self.config.codex_home.to_path_buf();
+                let cli_overrides = self.current_cli_overrides();
+                tokio::spawn(async move {
+                    let (success, error_msg) = tokio::select! {
+                        _ = cancel.cancelled() => {
+                            (false, Some("Login was not completed".to_string()))
+                        }
+                        r = complete_github_copilot_device_code_login(&codex_home, device_code) => {
+                            match r {
+                                Ok(()) => (true, None),
+                                Err(err) => (false, Some(err.to_string())),
+                            }
+                        }
+                    };
+
+                    let payload_v2 = AccountLoginCompletedNotification {
+                        login_id: Some(login_id.to_string()),
+                        success,
+                        error: error_msg,
+                    };
+                    outgoing_clone
+                        .send_server_notification(ServerNotification::AccountLoginCompleted(
+                            payload_v2,
+                        ))
+                        .await;
+
+                    if success {
+                        auth_manager.reload();
+                        replace_cloud_requirements_loader(
+                            cloud_requirements.as_ref(),
+                            auth_manager.clone(),
+                            chatgpt_base_url,
+                            codex_home,
+                        );
+                        sync_default_client_residency_requirement(
+                            &cli_overrides,
+                            cloud_requirements.as_ref(),
+                        )
+                        .await;
+
+                        let auth = auth_manager.auth_cached();
+                        let payload_v2 = AccountUpdatedNotification {
+                            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
+                            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                        };
+                        outgoing_clone
+                            .send_server_notification(ServerNotification::AccountUpdated(
+                                payload_v2,
+                            ))
+                            .await;
+                    }
+
+                    let mut guard = active_login.lock().await;
+                    if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
+                        *guard = None;
+                    }
+                });
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: err.to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
             }
         }
     }
@@ -1813,10 +1922,11 @@ impl CodexMessageProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        // Whether auth is required for the active model provider.
         let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+        let requires_account =
+            requires_openai_auth || self.config.model_provider_id == GITHUB_COPILOT_PROVIDER_ID;
 
-        if !requires_openai_auth {
+        if !requires_account {
             let response = GetAccountResponse {
                 account: None,
                 requires_openai_auth,
@@ -1849,6 +1959,7 @@ impl CodexMessageProcessor {
                         }
                     }
                 }
+                CoreAuthMode::GithubCopilot => Some(Account::GithubCopilot {}),
             },
             None => None,
         };

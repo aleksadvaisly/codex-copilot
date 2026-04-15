@@ -36,6 +36,11 @@ pub const OPENAI_PROVIDER_ID: &str = "openai";
 const GITHUB_COPILOT_PROVIDER_NAME: &str = "GitHub Copilot";
 pub const GITHUB_COPILOT_PROVIDER_ID: &str = "github-copilot";
 const GITHUB_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
+const GITHUB_COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot.vim/1.59.0";
+const GITHUB_COPILOT_EDITOR_VERSION: &str = "Vim/9.1.1752";
+const GITHUB_COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+const GITHUB_COPILOT_LANGUAGE_SERVER_VERSION: &str = "1.408.0";
+const GITHUB_COPILOT_USER_AGENT: &str = "GithubCopilot/1.408.0";
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
@@ -309,7 +314,33 @@ impl ModelProviderInfo {
             auth: None,
             wire_api: WireApi::Responses,
             query_params: None,
-            http_headers: None,
+            http_headers: Some(
+                [
+                    ("X-GitHub-Api-Version".to_string(), "2025-10-01".to_string()),
+                    (
+                        "Editor-Version".to_string(),
+                        GITHUB_COPILOT_EDITOR_VERSION.to_string(),
+                    ),
+                    (
+                        "Editor-Plugin-Version".to_string(),
+                        GITHUB_COPILOT_EDITOR_PLUGIN_VERSION.to_string(),
+                    ),
+                    (
+                        "Copilot-Language-Server-Version".to_string(),
+                        GITHUB_COPILOT_LANGUAGE_SERVER_VERSION.to_string(),
+                    ),
+                    (
+                        "User-Agent".to_string(),
+                        GITHUB_COPILOT_USER_AGENT.to_string(),
+                    ),
+                    (
+                        "Copilot-Integration-Id".to_string(),
+                        GITHUB_COPILOT_INTEGRATION_ID.to_string(),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            ),
             env_http_headers: None,
             request_max_retries: None,
             stream_max_retries: None,

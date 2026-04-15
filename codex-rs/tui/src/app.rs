@@ -3773,6 +3773,7 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
+        config.model = Some(model.clone());
         let model_catalog = Arc::new(ModelCatalog::new(
             available_models.clone(),
             CollaborationModesConfig {

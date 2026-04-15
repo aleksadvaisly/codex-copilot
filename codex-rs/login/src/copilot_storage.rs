@@ -12,6 +12,8 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GitHubCopilotAuth {
+    #[serde(default)]
+    pub api_base_url: Option<String>,
     pub github_access_token: String,
     pub copilot_access_token: String,
     pub copilot_token_expires_at: Option<DateTime<Utc>>,
@@ -61,5 +63,26 @@ pub fn delete_github_copilot_auth(codex_home: &Path) -> std::io::Result<bool> {
         Ok(()) => Ok(true),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_github_copilot_auth_creates_missing_parent_dir() {
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let codex_home = tempdir.path().join("missing").join("copilot-home");
+        let auth = GitHubCopilotAuth {
+            api_base_url: Some("https://api.business.githubcopilot.com".to_string()),
+            github_access_token: "github-token".to_string(),
+            copilot_access_token: "copilot-token".to_string(),
+            copilot_token_expires_at: None,
+        };
+
+        save_github_copilot_auth(&codex_home, &auth).expect("save should create parent dir");
+
+        assert!(codex_home.join("github-copilot-auth.json").exists());
     }
 }

@@ -570,6 +570,7 @@ impl HistoryCell for StatusHistoryCell {
                 (None, Some(plan)) => plan.clone(),
                 (None, None) => "ChatGPT".to_string(),
             },
+            StatusAccountDisplay::GitHubCopilot => "GitHub Copilot".to_string(),
             StatusAccountDisplay::ApiKey => {
                 "API key configured (run codex login to use ChatGPT)".to_string()
             }
