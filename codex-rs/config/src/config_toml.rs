@@ -30,6 +30,7 @@ use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_model_provider_info::GITHUB_COPILOT_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -56,8 +57,9 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 
-const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
+const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     OPENAI_PROVIDER_ID,
+    GITHUB_COPILOT_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
@@ -793,5 +795,27 @@ pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
                 "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn validate_reserved_model_provider_ids_rejects_github_copilot_override() {
+        let model_providers = HashMap::from([(
+            GITHUB_COPILOT_PROVIDER_ID.to_string(),
+            ModelProviderInfo::create_github_copilot_provider(),
+        )]);
+
+        let err = validate_reserved_model_provider_ids(&model_providers)
+            .expect_err("github-copilot override should be rejected");
+
+        assert_eq!(
+            err,
+            "model_providers contains reserved built-in provider IDs: `github-copilot`. Built-in providers cannot be overridden. Rename your custom provider (for example, `openai-custom`)."
+        );
     }
 }

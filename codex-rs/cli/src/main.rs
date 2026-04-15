@@ -15,6 +15,7 @@ use codex_cli::run_login_status;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
+use codex_cli::run_login_with_github_copilot;
 use codex_cli::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
@@ -35,6 +36,7 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 const DEFAULT_BIN_NAME: &str = "codex";
+const GITHUB_COPILOT_BIN_NAME: &str = "copilot";
 
 fn invoked_bin_name() -> String {
     std::env::args_os()
@@ -47,6 +49,14 @@ fn invoked_bin_name() -> String {
         })
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| DEFAULT_BIN_NAME.to_string())
+}
+
+fn invoked_provider_id() -> Option<&'static str> {
+    if invoked_bin_name() == GITHUB_COPILOT_BIN_NAME {
+        Some("github-copilot")
+    } else {
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -870,7 +880,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     run_login_status(login_cli.config_overrides).await;
                 }
                 None => {
-                    if login_cli.use_device_code {
+                    if invoked_provider_id() == Some("github-copilot") {
+                        run_login_with_github_copilot(login_cli.config_overrides).await;
+                    } else if login_cli.use_device_code {
                         run_login_with_device_code(
                             login_cli.config_overrides,
                             login_cli.issuer_base_url,

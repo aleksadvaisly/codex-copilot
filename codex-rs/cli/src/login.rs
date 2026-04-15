@@ -13,9 +13,12 @@ use codex_core::config::Config;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
+use codex_login::load_github_copilot_auth;
 use codex_login::login_with_api_key;
 use codex_login::logout;
+use codex_login::logout_github_copilot;
 use codex_login::run_device_code_login;
+use codex_login::run_github_copilot_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
@@ -34,7 +37,20 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
     "ChatGPT login is disabled. Use API key login instead.";
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
+const GITHUB_COPILOT_LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in to GitHub Copilot";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+
+fn use_github_copilot_login() -> bool {
+    std::env::args_os()
+        .next()
+        .and_then(|arg0| {
+            std::path::Path::new(&arg0)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name == "copilot")
+        })
+        .unwrap_or(false)
+}
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -153,6 +169,23 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
         }
         Err(e) => {
             eprintln!("Error logging in: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+pub async fn run_login_with_github_copilot(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _login_log_guard = init_login_file_logging(&config);
+    tracing::info!("starting github copilot login flow");
+
+    match run_github_copilot_device_code_login(&config.codex_home).await {
+        Ok(()) => {
+            eprintln!("{GITHUB_COPILOT_LOGIN_SUCCESS_MESSAGE}");
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Error logging in to GitHub Copilot: {err}");
             std::process::exit(1);
         }
     }
@@ -316,6 +349,23 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
+    if use_github_copilot_login() {
+        match load_github_copilot_auth(&config.codex_home) {
+            Ok(Some(_)) => {
+                eprintln!("Logged in using GitHub Copilot");
+                std::process::exit(0);
+            }
+            Ok(None) => {
+                eprintln!("Not logged in");
+                std::process::exit(1);
+            }
+            Err(err) => {
+                eprintln!("Error checking GitHub Copilot login status: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(Some(auth)) => match auth.auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {
@@ -346,6 +396,23 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+
+    if use_github_copilot_login() {
+        match logout_github_copilot(&config.codex_home) {
+            Ok(true) => {
+                eprintln!("Successfully logged out of GitHub Copilot");
+                std::process::exit(0);
+            }
+            Ok(false) => {
+                eprintln!("Not logged in");
+                std::process::exit(0);
+            }
+            Err(err) => {
+                eprintln!("Error logging out of GitHub Copilot: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     match logout(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(true) => {

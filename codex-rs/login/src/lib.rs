@@ -1,9 +1,11 @@
 pub mod api_bridge;
 pub mod auth;
 pub mod auth_env_telemetry;
+pub mod copilot_auth;
 pub mod provider_auth;
 pub mod token_data;
 
+mod copilot_storage;
 mod device_code_auth;
 mod pkce;
 mod server;
@@ -45,6 +47,11 @@ pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;
 pub use auth_env_telemetry::AuthEnvTelemetry;
 pub use auth_env_telemetry::collect_auth_env_telemetry;
+pub use copilot_auth::GITHUB_COPILOT_CLIENT_ID;
+pub use copilot_auth::logout_github_copilot;
+pub use copilot_auth::run_github_copilot_device_code_login;
+pub use copilot_storage::GitHubCopilotAuth;
+pub use copilot_storage::load_github_copilot_auth;
 pub use provider_auth::auth_manager_for_provider;
 pub use provider_auth::required_auth_manager_for_provider;
 pub use token_data::TokenData;

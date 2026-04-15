@@ -1,6 +1,8 @@
 use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
+use crate::copilot_storage::GitHubCopilotAuth;
+use crate::copilot_storage::save_github_copilot_auth;
 use crate::token_data::IdTokenInfo;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -344,6 +346,26 @@ async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
         .and_then(|auth| auth.api_key().map(str::to_string));
     assert_eq!(initial_token.as_deref(), Some("provider-token"));
     assert_eq!(refreshed_token.as_deref(), Some("refreshed-provider-token"));
+}
+
+#[tokio::test]
+async fn native_github_copilot_auth_manager_uses_stored_token() {
+    let codex_home = tempdir().unwrap();
+    save_github_copilot_auth(
+        codex_home.path(),
+        &GitHubCopilotAuth {
+            github_access_token: "ghu_test".to_string(),
+            copilot_access_token: "copilot-token".to_string(),
+            copilot_token_expires_at: None,
+        },
+    )
+    .expect("seed copilot auth");
+
+    let manager = AuthManager::native_github_copilot_bearer_only(codex_home.path().to_path_buf());
+    let auth = manager.auth().await.expect("copilot auth should resolve");
+
+    assert_eq!(auth.api_key(), Some("copilot-token"));
+    assert_eq!(manager.auth_mode(), Some(AuthMode::ApiKey));
 }
 
 struct ProviderAuthScript {

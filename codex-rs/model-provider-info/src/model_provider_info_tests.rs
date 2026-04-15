@@ -177,3 +177,28 @@ refresh_interval_ms = 0
     assert_eq!(auth.refresh_interval_ms, 0);
     assert_eq!(auth.refresh_interval(), None);
 }
+
+#[test]
+fn test_built_in_model_providers_include_github_copilot() {
+    let providers = built_in_model_providers(/* openai_base_url */ None);
+
+    assert!(providers.contains_key(GITHUB_COPILOT_PROVIDER_ID));
+}
+
+#[test]
+fn test_built_in_github_copilot_provider_metadata() {
+    let providers = built_in_model_providers(/* openai_base_url */ None);
+    let provider = providers
+        .get(GITHUB_COPILOT_PROVIDER_ID)
+        .expect("github-copilot provider should exist");
+
+    assert_eq!(provider.name, "GitHub Copilot");
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some("https://api.githubcopilot.com")
+    );
+    assert_eq!(provider.wire_api, WireApi::Responses);
+    assert!(!provider.requires_openai_auth);
+    assert!(!provider.supports_websockets);
+    assert_eq!(provider.auth, None);
+}
