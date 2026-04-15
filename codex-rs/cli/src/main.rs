@@ -34,6 +34,21 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+const DEFAULT_BIN_NAME: &str = "codex";
+
+fn invoked_bin_name() -> String {
+    std::env::args_os()
+        .next()
+        .and_then(|arg0| {
+            std::path::Path::new(&arg0)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| DEFAULT_BIN_NAME.to_string())
+}
+
 #[cfg(target_os = "macos")]
 mod app_cmd;
 #[cfg(target_os = "macos")]
@@ -1532,7 +1547,10 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codex";
+    let name = invoked_bin_name();
+    app = app.bin_name(name.clone()).override_usage(format!(
+        "{name} [OPTIONS] [PROMPT]\n       {name} [OPTIONS] <COMMAND> [ARGS]"
+    ));
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 

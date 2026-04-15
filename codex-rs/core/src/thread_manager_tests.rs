@@ -274,7 +274,7 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
-async fn new_uses_configured_openai_provider_for_model_refresh() {
+async fn new_uses_active_model_provider_for_model_refresh() {
     let server = MockServer::start().await;
     let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;
 
@@ -284,11 +284,14 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
     config.model_catalog = None;
+    config.model_provider_id = "copilot".to_string();
+    let mut copilot_provider = config.model_provider.clone();
+    copilot_provider.name = "GitHub Copilot".to_string();
+    copilot_provider.base_url = Some(server.uri());
+    config.model_provider = copilot_provider.clone();
     config
         .model_providers
-        .get_mut("openai")
-        .expect("openai provider should exist")
-        .base_url = Some(server.uri());
+        .insert("copilot".to_string(), copilot_provider);
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());

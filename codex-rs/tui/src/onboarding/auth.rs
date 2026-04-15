@@ -96,11 +96,13 @@ pub(crate) enum SignInState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SignInOption {
     ChatGpt,
+    GitHubCopilot,
     DeviceCode,
     ApiKey,
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
+const GITHUB_COPILOT_UNAVAILABLE_MESSAGE: &str = "GitHub Copilot sign-in is not available yet.";
 fn onboarding_request_id() -> codex_app_server_protocol::RequestId {
     codex_app_server_protocol::RequestId::String(Uuid::new_v4().to_string())
 }
@@ -201,6 +203,9 @@ impl KeyboardHandler for AuthModeWidget {
             KeyCode::Char('3') => {
                 self.select_option_by_index(/*index*/ 2);
             }
+            KeyCode::Char('4') => {
+                self.select_option_by_index(/*index*/ 3);
+            }
             KeyCode::Enter => {
                 let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
                 match sign_in_state {
@@ -297,6 +302,9 @@ impl AuthModeWidget {
     fn displayed_sign_in_options(&self) -> Vec<SignInOption> {
         let mut options = vec![SignInOption::ChatGpt];
         if self.is_chatgpt_login_allowed() {
+            options.push(SignInOption::GitHubCopilot);
+        }
+        if self.is_chatgpt_login_allowed() {
             options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
@@ -309,6 +317,7 @@ impl AuthModeWidget {
         let mut options = Vec::new();
         if self.is_chatgpt_login_allowed() {
             options.push(SignInOption::ChatGpt);
+            options.push(SignInOption::GitHubCopilot);
             options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
@@ -346,6 +355,9 @@ impl AuthModeWidget {
                     self.start_chatgpt_login();
                 }
             }
+            SignInOption::GitHubCopilot => {
+                self.disallow_github_copilot_login();
+            }
             SignInOption::DeviceCode => {
                 if self.is_chatgpt_login_allowed() {
                     self.start_device_code_login();
@@ -364,6 +376,13 @@ impl AuthModeWidget {
     fn disallow_api_login(&mut self) {
         self.highlighted_mode = SignInOption::ChatGpt;
         self.set_error(Some(API_KEY_DISABLED_MESSAGE.to_string()));
+        *self.sign_in_state.write().unwrap() = SignInState::PickMode;
+        self.request_frame.schedule_frame();
+    }
+
+    fn disallow_github_copilot_login(&mut self) {
+        self.highlighted_mode = SignInOption::GitHubCopilot;
+        self.set_error(Some(GITHUB_COPILOT_UNAVAILABLE_MESSAGE.to_string()));
         *self.sign_in_state.write().unwrap() = SignInState::PickMode;
         self.request_frame.schedule_frame();
     }
@@ -425,6 +444,14 @@ impl AuthModeWidget {
                         option,
                         "Sign in with ChatGPT",
                         chatgpt_description,
+                    ));
+                }
+                SignInOption::GitHubCopilot => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Sign in with GitHub Copilot",
+                        "Use your GitHub Copilot subscription",
                     ));
                 }
                 SignInOption::DeviceCode => {
@@ -955,6 +982,7 @@ pub(super) fn maybe_open_auth_url_in_browser(request_handle: &AppServerRequestHa
 mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
+    use crate::test_backend::VT100Backend;
     use codex_app_server_client::AppServerRequestHandle;
     use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
     use codex_app_server_client::InProcessAppServerClient;
@@ -965,10 +993,13 @@ mod tests {
 
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
+    use ratatui::Terminal;
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    async fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
+    async fn widget_with_forced_login_method(
+        forced_login_method: Option<ForcedLoginMethod>,
+    ) -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
         let codex_home_path = codex_home.path().to_path_buf();
         let config = ConfigBuilder::default()
@@ -1009,11 +1040,32 @@ mod tests {
             sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
             login_status: LoginStatus::NotAuthenticated,
             app_server_request_handle: AppServerRequestHandle::InProcess(client.request_handle()),
-            forced_login_method: Some(ForcedLoginMethod::Chatgpt),
+            forced_login_method,
             animations_enabled: true,
             animations_suppressed: std::cell::Cell::new(false),
         };
         (widget, codex_home)
+    }
+
+    async fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
+        widget_with_forced_login_method(Some(ForcedLoginMethod::Chatgpt)).await
+    }
+
+    async fn widget_with_all_options() -> (AuthModeWidget, TempDir) {
+        widget_with_forced_login_method(None).await
+    }
+
+    #[test]
+    fn pick_mode_snapshot_includes_github_copilot_option() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_with_all_options());
+
+        let mut terminal = Terminal::new(VT100Backend::new(80, 18)).expect("terminal");
+        terminal
+            .draw(|frame| frame.render_widget_ref(&widget, frame.area()))
+            .expect("render auth widget");
+
+        insta::assert_snapshot!("auth_mode_pick_mode", terminal.backend());
     }
 
     #[tokio::test]
@@ -1026,6 +1078,23 @@ mod tests {
             widget.error_message().as_deref(),
             Some(API_KEY_DISABLED_MESSAGE)
         );
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::PickMode
+        ));
+    }
+
+    #[tokio::test]
+    async fn github_copilot_flow_reports_not_available() {
+        let (mut widget, _tmp) = widget_with_all_options().await;
+
+        widget.handle_sign_in_option(SignInOption::GitHubCopilot);
+
+        assert_eq!(
+            widget.error_message().as_deref(),
+            Some(GITHUB_COPILOT_UNAVAILABLE_MESSAGE)
+        );
+        assert_eq!(widget.highlighted_mode, SignInOption::GitHubCopilot);
         assert!(matches!(
             &*widget.sign_in_state.read().unwrap(),
             SignInState::PickMode
