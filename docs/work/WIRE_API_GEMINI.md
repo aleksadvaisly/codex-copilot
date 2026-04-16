@@ -4,6 +4,8 @@
 
 Dodać natywne wsparcie dla Gemini jako osobnego wire API w `codex-rs`, analogicznie do `WireApi::Anthropic`.
 
+Ważne doprecyzowanie: chodzi o Gemini dostępne przez GitHub Copilot, nie o osobną subskrypcję Google AI Studio.
+
 Ten dokument opisuje założenia, które chcemy utrzymać przed implementacją:
 
 - Gemini ma być pierwszorzędnym wire API, a nie shimem przez OpenAI Responses.
@@ -23,14 +25,16 @@ Ten dokument opisuje założenia, które chcemy utrzymać przed implementacją:
      - `Anthropic`
      - `Gemini`
    - Wybór wire API ma wynikać z konfiguracji providera, nie z heurystyki po nazwie modelu.
+   - Pierwsza iteracja zakłada Gemini w ramach GitHub Copilot model provider, nie osobny Google auth flow.
 
 3. **Modele Gemini muszą być widoczne w `models`**
    - Jeśli provider Gemini zwraca modele z endpointem Gemini-native, to `supported_in_api` musi to odzwierciedlać.
    - Filtr w `ModelPreset::filter_by_auth` nie powinien zawierać wyjątków typu „sprawdź nazwę modelu”.
 
 4. **Konfiguracja providera musi pozostać spójna**
-   - `wire_api = "gemini"` powinno być ustawiane w `config.toml` tak samo jawnie jak `anthropic`.
-   - Wsparcie musi działać z istniejącym systemem `model_provider`, `requires_openai_auth`, `auth`, `headers` i `query_params` tam, gdzie to ma sens.
+    - `wire_api = "gemini"` powinno być ustawiane w `config.toml` tak samo jawnie jak `anthropic`.
+    - Wsparcie musi działać z istniejącym systemem `model_provider`, `requires_openai_auth`, `auth`, `headers` i `query_params` tam, gdzie to ma sens.
+   - Dla Copilota zakładamy, że Gemini jest jednym z endpointów/model families wystawianych przez ten sam provider, więc nie projektujemy osobnego logowania do Google.
 
 5. **Wspólny model rozmowy pozostaje po stronie core**
    - Nie chcemy rozlewać Gemini-specific typów po UI i warstwach wysokiego poziomu.
@@ -77,6 +81,7 @@ Założenie:
 - Responses zostaje bez zmian
 - Anthropic zostaje bez zmian
 - Gemini dostaje własny serializer i stream processor
+- Jeśli Copilot wystawia Gemini przez własny gateway, adapter mapuje to jako native Gemini wire API, ale auth nadal idzie przez Copilot/provider credentials
 
 ### 3. Zmienić model discovery
 
@@ -109,14 +114,18 @@ Najrozsądniejszy minimalny zakres:
 
 - Jak dokładnie Gemini ma mapować system prompt, assistant history i tool calls?
 - Czy Gemini ma wspierać ten sam zestaw funkcji co Anthropic od razu, czy tylko podzbiór?
-- Czy provider Gemini ma korzystać z tych samych auth primitives co istniejące providery, czy wymaga osobnej logiki tokenów?
-- Czy Gemini będzie dostępny tylko dla modeli z własnego provider config, czy też jako mapowanie części modeli z obecnych zewnętrznych katalogów?
+- Czy provider Gemini ma korzystać z tych samych auth primitives co istniejące providery Copilot, czy wymaga osobnej logiki tokenów?
+- Czy Gemini będzie dostępny tylko dla modeli z własnego provider config Copilot, czy też jako mapowanie części modeli z obecnych zewnętrznych katalogów?
+
+- Jak dokładnie Copilot oznacza modele Gemini w `/models`, żeby `supported_in_api` można było ustalać bez heurystyk po nazwie?
+- Jakie są docelowe endpointy Gemini w Copilot gateway i czy różnią się od standardowego Google Gemini API?
 
 ## Kryteria ukończenia
 
 Uważamy plan za gotowy, gdy:
 
 - `WireApi::Gemini` jest jawnie dostępne w konfiguracji providera.
+- Dokument i implementacja wyraźnie traktują Gemini jako część Copilot model provider, nie niezależną subskrypcję Google.
 - `models` pokazuje Gemini-native modele, jeśli provider je zwraca.
 - Gemini ma osobny path streamingowy w core.
 - Testy potwierdzają, że Gemini nie jest filtrowane jak zwykły OpenAI Responses model.
