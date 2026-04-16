@@ -86,6 +86,8 @@ pub async fn resolve_provider_api_access(
             api_auth = CoreAuthProvider {
                 token: Some(session.access_token),
                 account_id: None,
+                token_header_name: None,
+                token_prefix: None,
             };
         }
     }

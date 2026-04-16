@@ -31,6 +31,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use codex_api::AnthropicClient as ApiAnthropicClient;
 use codex_api::ApiError;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
@@ -1230,6 +1231,86 @@ impl ModelClientSession {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(
+        name = "model_client.stream_anthropic",
+        level = "info",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            wire_api = %self.client.state.provider.wire_api,
+            transport = "anthropic_http",
+            http.method = "POST",
+            api.path = "v1/messages",
+            turn.has_metadata_header = turn_metadata_header.is_some()
+        )
+    )]
+    async fn stream_anthropic(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<ResponseStream> {
+        let auth_manager = self.client.state.auth_manager.clone();
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(AuthManager::unauthorized_recovery);
+        let mut pending_retry = PendingUnauthorizedRetry::default();
+
+        loop {
+            let client_setup = self.client.current_client_setup().await?;
+            let request_auth_context = AuthRequestTelemetryContext::new(
+                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
+                &client_setup.api_auth,
+                pending_retry,
+            );
+            let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
+                session_telemetry,
+                request_auth_context,
+                RequestRouteTelemetry::for_endpoint("v1/messages"),
+                self.client.state.auth_env_telemetry.clone(),
+            );
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            let client = ApiAnthropicClient::new(
+                transport,
+                client_setup.api_provider,
+                client_setup.api_auth,
+            )
+            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+            let stream_result = client
+                .stream_request(
+                    model_info.slug.clone(),
+                    prompt.base_instructions.text.clone(),
+                    prompt.get_formatted_input(),
+                    Default::default(),
+                )
+                .await;
+
+            match stream_result {
+                Ok(stream) => {
+                    let (stream, _) = map_response_stream(stream, session_telemetry.clone());
+                    return Ok(stream);
+                }
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    pending_retry = PendingUnauthorizedRetry::from_recovery(
+                        handle_unauthorized(
+                            unauthorized_transport,
+                            &mut auth_recovery,
+                            session_telemetry,
+                        )
+                        .await?,
+                    );
+                    continue;
+                }
+                Err(err) => return Err(map_api_error(err)),
+            }
+        }
+    }
+
     /// Streams a turn via the Responses API over WebSocket transport.
     #[allow(clippy::too_many_arguments)]
     #[instrument(
@@ -1486,9 +1567,10 @@ impl ModelClientSession {
                 )
                 .await
             }
-            StreamRoute::Anthropic => Err(CodexErr::UnsupportedOperation(
-                "WireApi::Anthropic transport is not implemented yet".to_string(),
-            )),
+            StreamRoute::Anthropic => {
+                self.stream_anthropic(prompt, model_info, session_telemetry, turn_metadata_header)
+                    .await
+            }
         }
     }
 

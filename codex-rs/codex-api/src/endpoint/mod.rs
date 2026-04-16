@@ -1,3 +1,4 @@
+pub(crate) mod anthropic;
 pub(crate) mod compact;
 pub(crate) mod memories;
 pub(crate) mod models;
@@ -7,6 +8,8 @@ pub(crate) mod responses;
 pub(crate) mod responses_websocket;
 mod session;
 
+pub use anthropic::AnthropicClient;
+pub use anthropic::AnthropicOptions;
 pub use compact::CompactClient;
 pub use memories::MemoriesClient;
 pub use models::ModelsClient;

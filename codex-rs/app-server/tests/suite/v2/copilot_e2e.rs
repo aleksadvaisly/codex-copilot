@@ -73,6 +73,25 @@ fn is_responses_api_unsupported(message: &str) -> bool {
         || message.contains("does not support Responses API")
 }
 
+fn supports_anthropic_messages_api(model: &RawCopilotModel) -> bool {
+    model
+        .supported_endpoints
+        .iter()
+        .any(|endpoint| endpoint == "/v1/messages")
+}
+
+fn find_live_anthropic_model(raw_models: &RawCopilotModelsResponse) -> Option<&RawCopilotModel> {
+    raw_models
+        .data
+        .iter()
+        .find(|model| model.id == "claude-sonnet-4.6" && supports_anthropic_messages_api(model))
+        .or_else(|| {
+            raw_models.data.iter().find(|model| {
+                model.id.starts_with("claude-") && supports_anthropic_messages_api(model)
+            })
+        })
+}
+
 fn require_copilot_home() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let path = PathBuf::from(home).join(".codex-copilot");
@@ -254,6 +273,96 @@ async fn send_hey_turn_and_wait(mcp: &mut McpProcess, thread_id: String) -> Resu
             _ => {}
         }
     }
+}
+
+#[ignore = "requires live GitHub Copilot credentials in ~/.codex-copilot"]
+#[tokio::test]
+async fn live_github_copilot_anthropic_model_turn_start_hey_returns_assistant_text() -> Result<()> {
+    let Some(source_home) = require_copilot_home() else {
+        eprintln!(
+            "skipping live_github_copilot_anthropic_model_turn_start_hey_returns_assistant_text - ~/.codex-copilot/github-copilot-auth.json not found"
+        );
+        return Ok(());
+    };
+
+    let codex_home = TempDir::new()?;
+    copy_live_copilot_auth(&source_home, &codex_home)?;
+    write_live_copilot_config(&codex_home)?;
+
+    let raw_models = live_raw_copilot_models(&codex_home).await?;
+    let anthropic_model = find_live_anthropic_model(&raw_models).context(
+        "expected a Claude model with /v1/messages support in live GitHub Copilot /models",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let thread = start_thread_with_model(&mut mcp, anthropic_model.id.clone())
+        .await?
+        .thread;
+
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "hey".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_request_id)),
+    )
+    .await??;
+
+    let mut assistant_text: Option<String> = None;
+    loop {
+        let message = timeout(DEFAULT_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        match notification.method.as_str() {
+            "item/completed" => {
+                let completed: ItemCompletedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .expect("item/completed params must be present"),
+                )?;
+                if let ThreadItem::AgentMessage { text, .. } = completed.item
+                    && !text.trim().is_empty()
+                {
+                    assistant_text = Some(text);
+                }
+            }
+            "turn/completed" => {
+                let completed: TurnCompletedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .expect("turn/completed params must be present"),
+                )?;
+                assert_eq!(
+                    completed.turn.status,
+                    codex_app_server_protocol::TurnStatus::Completed,
+                    "expected Claude over GitHub Copilot to complete the turn, got error: {:?}",
+                    completed.turn.error
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let assistant_text = assistant_text.context(
+        "expected non-empty assistant text from Claude over GitHub Copilot in item/completed",
+    )?;
+    assert!(
+        !assistant_text.trim().is_empty(),
+        "expected Claude over GitHub Copilot to emit non-empty assistant text"
+    );
+
+    Ok(())
 }
 
 #[ignore = "requires live GitHub Copilot credentials in ~/.codex-copilot"]

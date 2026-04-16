@@ -1,5 +1,6 @@
 use codex_client::Request;
 use http::HeaderMap;
+use http::HeaderName;
 use http::HeaderValue;
 
 /// Provides bearer and account identity information for API requests.
@@ -9,16 +10,21 @@ use http::HeaderValue;
 /// reach this interface.
 pub trait AuthProvider: Send + Sync {
     fn bearer_token(&self) -> Option<String>;
+    fn auth_header(&self) -> Option<(&'static str, String)> {
+        self.bearer_token()
+            .map(|token| ("authorization", format!("Bearer {token}")))
+    }
     fn account_id(&self) -> Option<String> {
         None
     }
 }
 
 pub(crate) fn add_auth_headers_to_header_map<A: AuthProvider>(auth: &A, headers: &mut HeaderMap) {
-    if let Some(token) = auth.bearer_token()
-        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
+    if let Some((header_name, header_value)) = auth.auth_header()
+        && let Ok(value) = HeaderValue::from_str(&header_value)
     {
-        let _ = headers.insert(http::header::AUTHORIZATION, header);
+        let name = HeaderName::from_static(header_name);
+        let _ = headers.insert(name, value);
     }
     if let Some(account_id) = auth.account_id()
         && let Ok(header) = HeaderValue::from_str(&account_id)

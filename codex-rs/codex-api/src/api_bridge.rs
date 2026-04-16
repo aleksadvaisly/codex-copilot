@@ -178,23 +178,34 @@ struct UsageErrorBody {
 pub struct CoreAuthProvider {
     pub token: Option<String>,
     pub account_id: Option<String>,
+    pub token_header_name: Option<&'static str>,
+    pub token_prefix: Option<&'static str>,
 }
 
 impl CoreAuthProvider {
+    fn auth_header_value(&self) -> Option<String> {
+        let token = self.token.as_ref()?;
+        let prefix = self.token_prefix.unwrap_or("Bearer ");
+        Some(format!("{prefix}{token}"))
+    }
+
     pub fn auth_header_attached(&self) -> bool {
-        self.token
+        self.auth_header_value()
             .as_ref()
-            .is_some_and(|token| http::HeaderValue::from_str(&format!("Bearer {token}")).is_ok())
+            .is_some_and(|value| http::HeaderValue::from_str(value).is_ok())
     }
 
     pub fn auth_header_name(&self) -> Option<&'static str> {
-        self.auth_header_attached().then_some("authorization")
+        self.auth_header_attached()
+            .then_some(self.token_header_name.unwrap_or("authorization"))
     }
 
     pub fn for_test(token: Option<&str>, account_id: Option<&str>) -> Self {
         Self {
             token: token.map(str::to_string),
             account_id: account_id.map(str::to_string),
+            token_header_name: None,
+            token_prefix: None,
         }
     }
 }
@@ -202,6 +213,10 @@ impl CoreAuthProvider {
 impl ApiAuthProvider for CoreAuthProvider {
     fn bearer_token(&self) -> Option<String> {
         self.token.clone()
+    }
+
+    fn auth_header(&self) -> Option<(&'static str, String)> {
+        Some((self.auth_header_name()?, self.auth_header_value()?))
     }
 
     fn account_id(&self) -> Option<String> {

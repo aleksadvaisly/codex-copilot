@@ -2051,6 +2051,13 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "Anthropic's Messages API exposed at `/v1/messages`.",
+          "enum": [
+            "anthropic"
+          ],
+          "type": "string"
         }
       ]
     }
