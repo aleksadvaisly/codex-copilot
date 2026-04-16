@@ -3,7 +3,11 @@ BIN_DIR := $(PREFIX)/bin
 TARGET_DIR := ./codex-rs/target/release
 
 .PHONY: install
+.PHONY: run
 .PHONY: e2e
+
+run:
+	cargo run --locked --manifest-path ./codex-rs/Cargo.toml -p codex-cli --bin copilot
 
 install:
 	cargo build --locked --release --manifest-path ./codex-rs/Cargo.toml -p codex-cli --bin copilot
