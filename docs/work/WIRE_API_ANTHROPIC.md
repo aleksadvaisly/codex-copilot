@@ -583,3 +583,134 @@ If we start implementation, the first code PR should do only this:
 3. no provider behavior change yet
 
 That creates the seam needed for a safe Anthropic follow-up PR.
+
+---
+
+## Implementation status (updated 2026-04-16)
+
+### What is done (commit `8dced79c5`)
+
+The planning phases above have been executed in a different form than originally intended.
+Claude on Copilot routes through Chat Completions (`/chat/completions`), not through the
+native Anthropic Messages endpoint (`/v1/messages`), even though the model discovery API
+advertises `/v1/messages`. This was confirmed against a real Copilot API trace.
+
+Implemented:
+
+- `WireApi::Anthropic` variant added to `model-provider-info/src/lib.rs`
+- `ModelWireApi::Anthropic` in `protocol/src/openai_models.rs`
+- `StreamRoute::Anthropic` in `core/src/client.rs`, routing to `stream_anthropic()`
+- `codex-api/src/endpoint/anthropic.rs` - new module implementing:
+  - `AnthropicClient` over Chat Completions (`POST chat/completions`)
+  - `ChatCompletionsRequest` with model/messages/stream/max_tokens
+  - `chat_messages_from_input()` - maps `ResponseItem::Message` (system/developer/user/assistant) to OpenAI Chat Completions messages
+  - `process_anthropic_sse()` - parses OpenAI delta SSE and emits the `Created -> OutputItemAdded -> OutputTextDelta* -> OutputItemDone -> Completed` event sequence required by the codex.rs state machine
+  - fixture test with real Copilot SSE captured from curl
+- `models-manager/src/copilot_models.rs` - Claude models get `wire_api: Anthropic`
+- Live e2e test in `codex-api/tests/copilot_live_e2e.rs`
+
+**Proven**: plain text streaming works end-to-end. `hey` to `claude-sonnet-4.6` via Copilot
+produces a correct streaming response.
+
+### What is missing - tool calls
+
+Text streaming is all that works. Tool calls (and therefore MCP) are not implemented.
+
+#### Gap 1 - tools not sent to the model
+
+`core/src/client.rs:1297` passes `Default::default()` for `AnthropicOptions`:
+
+```rust
+client.stream_request(
+    model_info.slug.clone(),
+    prompt.base_instructions.text.clone(),
+    prompt.get_formatted_input(),
+    Default::default(),  // AnthropicOptions has no tools field
+)
+```
+
+`AnthropicOptions` in `codex-api/src/endpoint/anthropic.rs` has no `tools` field.
+`ChatCompletionsRequest` (line 46) has no `tools` field.
+
+Fix: add `tools: Vec<Value>` to `AnthropicOptions` and `ChatCompletionsRequest`.
+Caller in `stream_anthropic()` must pass `prompt.tools` after serializing to Chat Completions format.
+
+#### Gap 2 - wrong tools serialization format
+
+`ToolSpec` (in `codex-rs/tools/src/tool_spec.rs`) serializes to Responses API format:
+
+```json
+{"type": "function", "name": "...", "parameters": {...}}
+```
+
+Chat Completions requires a different nesting:
+
+```json
+{"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+```
+
+Fix: add a separate serializer in `anthropic.rs` that maps `ToolSpec::Function` to Chat
+Completions format. Other `ToolSpec` variants (`LocalShell`, `Namespace`, `WebSearch`, etc.)
+have no Chat Completions equivalent - they must be mapped or skipped explicitly.
+
+#### Gap 3 - SSE parser does not handle tool_calls deltas
+
+`ChatDelta` (line 402) has only `content: Option<String>`. The `tool_calls` field in delta
+chunks is not parsed. `finish_reason: "tool_calls"` is not handled (only "stop"/"end_turn"
+are handled).
+
+Chat Completions tool call SSE shape:
+
+```json
+{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"shell","arguments":""}}]}}]}
+{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":"}}]}}]}
+{"choices":[{"finish_reason":"tool_calls","delta":{}}]}
+```
+
+Fix: extend `ChatDelta` with `tool_calls: Option<Vec<ChatToolCallDelta>>`. In
+`process_anthropic_sse()`, accumulate argument chunks per tool call index, then on
+`finish_reason: "tool_calls"` emit:
+
+1. `OutputItemAdded(ResponseItem::FunctionCall { id, name, arguments: "", call_id })` per call
+2. `OutputItemDone(ResponseItem::FunctionCall { ... arguments: full_json })` per call
+3. `Completed`
+
+#### Gap 4 - FunctionCallOutput not converted to messages
+
+`chat_messages_from_input()` only handles `ResponseItem::Message`. When a tool call result
+comes back as `ResponseItem::FunctionCallOutput { call_id, output }` in the transcript, it is
+silently dropped.
+
+Chat Completions expects the tool result as a message with role `tool`:
+
+```json
+{ "role": "tool", "tool_call_id": "call_abc", "content": "...output..." }
+```
+
+And the assistant's prior function call must appear as a message with role `assistant` and a
+`tool_calls` field (not a text `content`).
+
+Fix: in `chat_messages_from_input()`, handle:
+
+- `ResponseItem::FunctionCall` -> `{"role": "assistant", "tool_calls": [{...}]}`
+- `ResponseItem::FunctionCallOutput` -> `{"role": "tool", "tool_call_id": ..., "content": ...}`
+
+#### Gap 5 - CustomToolCall / CustomToolCallOutput not handled
+
+Same problem as Gap 4 but for MCP-sourced tools represented as
+`ResponseItem::CustomToolCall` and `ResponseItem::CustomToolCallOutput`. These also need
+mapping to Chat Completions tool message format.
+
+### Implementation order for tool calls
+
+1. Extend `ChatDelta` with `tool_calls` field and add `ChatToolCallDelta` struct
+2. Add `finish_reason: "tool_calls"` branch in `process_anthropic_sse()` that emits
+   `OutputItemAdded + OutputItemDone` for each accumulated function call
+3. Add Chat Completions tool serializer (separate from `ToolSpec` Responses API serializer)
+4. Add `tools: Vec<Value>` to `AnthropicOptions` + `ChatCompletionsRequest`
+5. Extend `chat_messages_from_input()` to handle `FunctionCall`, `FunctionCallOutput`,
+   `CustomToolCall`, `CustomToolCallOutput`
+6. Pass `prompt.tools` in `stream_anthropic()` after converting to Chat Completions format
+
+All changes are local to `codex-api/src/endpoint/anthropic.rs` and one line in
+`core/src/client.rs`. The `WireApi` routing does not need to change.
