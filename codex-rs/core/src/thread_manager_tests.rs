@@ -286,7 +286,6 @@ async fn new_uses_active_model_provider_for_model_refresh() {
     config.model_catalog = None;
     config.model_provider_id = "copilot".to_string();
     let mut copilot_provider = config.model_provider.clone();
-    copilot_provider.name = "GitHub Copilot".to_string();
     copilot_provider.base_url = Some(server.uri());
     config.model_provider = copilot_provider.clone();
     config

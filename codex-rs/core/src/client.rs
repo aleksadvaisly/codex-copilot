@@ -1251,7 +1251,7 @@ impl ModelClientSession {
             wire_api = %self.client.state.provider.wire_api,
             transport = "anthropic_http",
             http.method = "POST",
-            api.path = "v1/messages",
+            api.path = "chat/completions",
             turn.has_metadata_header = turn_metadata_header.is_some()
         )
     )]
@@ -1278,7 +1278,7 @@ impl ModelClientSession {
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
                 session_telemetry,
                 request_auth_context,
-                RequestRouteTelemetry::for_endpoint("v1/messages"),
+                RequestRouteTelemetry::for_endpoint("chat/completions"),
                 self.client.state.auth_env_telemetry.clone(),
             );
             let transport = ReqwestTransport::new(build_reqwest_client());
