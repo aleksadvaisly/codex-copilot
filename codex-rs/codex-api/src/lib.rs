@@ -38,6 +38,8 @@ pub use crate::common::response_create_client_metadata;
 pub use crate::endpoint::AnthropicClient;
 pub use crate::endpoint::AnthropicOptions;
 pub use crate::endpoint::CompactClient;
+pub use crate::endpoint::GeminiClient;
+pub use crate::endpoint::GeminiOptions;
 pub use crate::endpoint::MemoriesClient;
 pub use crate::endpoint::ModelsClient;
 pub use crate::endpoint::RealtimeCallClient;

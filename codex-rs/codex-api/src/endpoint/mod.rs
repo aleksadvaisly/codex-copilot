@@ -1,5 +1,6 @@
 pub(crate) mod anthropic;
 pub(crate) mod compact;
+pub(crate) mod gemini;
 pub(crate) mod memories;
 pub(crate) mod models;
 pub(crate) mod realtime_call;
@@ -11,6 +12,8 @@ mod session;
 pub use anthropic::AnthropicClient;
 pub use anthropic::AnthropicOptions;
 pub use compact::CompactClient;
+pub use gemini::GeminiClient;
+pub use gemini::GeminiOptions;
 pub use memories::MemoriesClient;
 pub use models::ModelsClient;
 pub use realtime_call::RealtimeCallClient;
