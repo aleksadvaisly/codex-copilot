@@ -27,6 +27,8 @@ pub(crate) struct CopilotModel {
     pub(crate) preview: bool,
     #[serde(default)]
     pub(crate) policy: Option<CopilotPolicy>,
+    #[serde(default)]
+    pub(crate) supported_endpoints: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,7 +121,10 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
         supported_reasoning_levels,
         shell_type: ConfigShellToolType::Default,
         visibility: ModelVisibility::List,
-        supported_in_api: true,
+        supported_in_api: model
+            .supported_endpoints
+            .iter()
+            .any(|endpoint| endpoint == "/responses"),
         priority: if model.preview { 10 } else { 0 },
         additional_speed_tiers: Vec::new(),
         availability_nux: None,
@@ -197,6 +202,7 @@ mod tests {
                       "vision": true
                     }
                   },
+                  "supported_endpoints": ["/responses", "ws:/responses"],
                   "policy": {
                     "state": "enabled"
                   }
@@ -220,6 +226,7 @@ mod tests {
         assert_eq!(models[0].slug, "gpt-5.4");
         assert_eq!(models[0].display_name, "GPT-5.4");
         assert_eq!(models[0].context_window, Some(272_000));
+        assert!(models[0].supported_in_api);
         assert!(models[0].supports_parallel_tool_calls);
         assert!(models[0].supports_image_detail_original);
         assert_eq!(
@@ -232,6 +239,73 @@ mod tests {
                 ReasoningEffort::Low,
                 ReasoningEffort::Medium,
                 ReasoningEffort::High,
+            ]
+        );
+    }
+
+    #[test]
+    fn marks_non_responses_models_as_unsupported_in_api() {
+        let response: CopilotModelsResponse = serde_json::from_str(
+            r#"{
+              "object": "list",
+              "data": [
+                {
+                  "id": "claude-sonnet-4.6",
+                  "name": "Claude Sonnet 4.6",
+                  "model_picker_enabled": true,
+                  "capabilities": {
+                    "type": "chat",
+                    "supports": {
+                      "parallel_tool_calls": true,
+                      "reasoning_effort": ["low", "medium", "high"],
+                      "vision": true
+                    }
+                  },
+                  "supported_endpoints": ["/chat/completions", "/v1/messages"]
+                },
+                {
+                  "id": "gemini-2.5-pro",
+                  "name": "Gemini 2.5 Pro",
+                  "model_picker_enabled": true,
+                  "capabilities": {
+                    "type": "chat",
+                    "supports": {
+                      "parallel_tool_calls": true,
+                      "vision": true
+                    }
+                  },
+                  "supported_endpoints": ["/chat/completions"]
+                },
+                {
+                  "id": "gpt-4o",
+                  "name": "GPT-4o",
+                  "model_picker_enabled": true,
+                  "capabilities": {
+                    "type": "chat",
+                    "supports": {
+                      "parallel_tool_calls": true,
+                      "vision": true
+                    }
+                  },
+                  "supported_endpoints": ["/chat/completions"]
+                }
+              ]
+            }"#,
+        )
+        .expect("valid response");
+
+        let models = translate_models(response);
+
+        assert_eq!(models.len(), 3);
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| (model.slug.as_str(), model.supported_in_api))
+                .collect::<Vec<_>>(),
+            vec![
+                ("claude-sonnet-4.6", false),
+                ("gemini-2.5-pro", false),
+                ("gpt-4o", false),
             ]
         );
     }

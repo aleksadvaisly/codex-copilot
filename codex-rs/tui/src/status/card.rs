@@ -6,7 +6,6 @@ use crate::legacy_core::config::Config;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
-use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -257,7 +256,7 @@ impl StatusHistoryCell {
                 summarize_sandbox_policy(config.permissions.sandbox_policy.get()),
             ),
         ];
-        if config.model_provider.wire_api == WireApi::Responses {
+        if config.model_provider.wire_api.supports_reasoning_controls() {
             let effort_value = reasoning_effort_override
                 .unwrap_or(None)
                 .map(|effort| effort.to_string())

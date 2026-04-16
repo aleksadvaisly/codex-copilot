@@ -168,6 +168,20 @@ struct CurrentClientSetup {
     api_auth: CoreAuthProvider,
 }
 
+enum StreamRoute {
+    Responses,
+    Anthropic,
+}
+
+impl From<WireApi> for StreamRoute {
+    fn from(value: WireApi) -> Self {
+        match value {
+            WireApi::Responses => Self::Responses,
+            WireApi::Anthropic => Self::Anthropic,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct RequestRouteTelemetry {
     endpoint: &'static str,
@@ -1435,9 +1449,9 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
-        let wire_api = self.client.state.provider.wire_api;
-        match wire_api {
-            WireApi::Responses => {
+        let stream_route = StreamRoute::from(self.client.state.provider.wire_api);
+        match stream_route {
+            StreamRoute::Responses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
@@ -1472,6 +1486,9 @@ impl ModelClientSession {
                 )
                 .await
             }
+            StreamRoute::Anthropic => Err(CodexErr::UnsupportedOperation(
+                "WireApi::Anthropic transport is not implemented yet".to_string(),
+            )),
         }
     }
 
