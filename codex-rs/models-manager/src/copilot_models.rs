@@ -111,8 +111,6 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
         .first()
         .map(|preset| preset.effort);
     let supports_image_detail_original = supports.is_some_and(|value| value.vision);
-    let context_window =
-        limits.and_then(|value| value.max_prompt_tokens.or(value.max_context_window_tokens));
     let supports_responses_api = model
         .supported_endpoints
         .iter()
@@ -126,6 +124,18 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
     } else {
         ModelWireApi::Responses
     };
+    let context_window =
+        limits.and_then(|value| value.max_prompt_tokens.or(value.max_context_window_tokens));
+    // Copilot's model discovery API does not always populate `limits` for
+    // Anthropic models. Fall back to known context windows so the TUI can
+    // display "X% left · YK window" correctly.
+    let context_window = context_window.or_else(|| {
+        if wire_api == ModelWireApi::Anthropic {
+            claude_fallback_context_window(&model.id)
+        } else {
+            None
+        }
+    });
 
     ModelInfo {
         slug: model.id.clone(),
@@ -163,6 +173,24 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         wire_api,
+    }
+}
+
+/// Returns a known context window size for Claude models exposed through
+/// GitHub Copilot when the API does not populate `limits` in its model
+/// discovery response.
+///
+/// Values are sourced from Anthropic's published model documentation.
+/// The mapping is intentionally conservative - only models with a confirmed
+/// public context window are listed here. Unknown model IDs return `None` so
+/// the TUI omits the window display rather than showing a wrong value.
+fn claude_fallback_context_window(model_id: &str) -> Option<i64> {
+    // All currently-released Claude 3.x / 4.x models share a 200 000-token
+    // context window per Anthropic's public documentation.
+    if model_id.starts_with("claude-") {
+        Some(200_000)
+    } else {
+        None
     }
 }
 

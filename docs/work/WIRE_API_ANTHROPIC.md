@@ -714,3 +714,67 @@ mapping to Chat Completions tool message format.
 
 All changes are local to `codex-api/src/endpoint/anthropic.rs` and one line in
 `core/src/client.rs`. The `WireApi` routing does not need to change.
+
+---
+
+## Context window and token usage display (updated 2026-04-16)
+
+### Symptoms
+
+When switching from a GPT model to a Claude model in the TUI, the status bar shows:
+
+- Context percentage always at 100% (never updates)
+- No window size shown ("YK window" text absent)
+
+### Root cause 1 - token usage not parsed from SSE
+
+`ChatCompletionsChunk` did not have a `usage` field, so token counts reported
+on the last SSE chunk were silently dropped. `ResponseEvent::Completed` was always
+emitted with `token_usage: None`, so `TokenUsageInfo.last_token_usage` never
+updated and the context percentage stayed at 100%.
+
+Copilot includes usage on the finish chunk (unconditionally, without needing
+`stream_options.include_usage`):
+
+```json
+{"choices":[{"finish_reason":"stop",...}],
+ "usage":{"prompt_tokens":14,"completion_tokens":7,"total_tokens":21},...}
+```
+
+Fix: add `ChatUsage` struct to `ChatCompletionsChunk`, accumulate in `last_usage`
+during the SSE loop, and pass `last_usage.take().map(chat_usage_to_token_usage)`
+to every `ResponseEvent::Completed` emission.
+
+Mapping: `prompt_tokens` -> `input_tokens`, `completion_tokens` -> `output_tokens`.
+`cached_input_tokens` and `reasoning_output_tokens` are 0 (not available in Chat
+Completions wire format).
+
+Files: `codex-api/src/endpoint/anthropic.rs`
+
+### Root cause 2 - Copilot API does not return limits for Claude models
+
+`copilot_models.rs` derives `context_window` from
+`limits.max_prompt_tokens` / `max_context_window_tokens` in the Copilot model
+discovery response. The Copilot API does not populate `limits` for Claude models,
+so `context_window` is `None` and the TUI omits the "YK window" display.
+
+Fix: add `claude_fallback_context_window(model_id)` in `copilot_models.rs` that
+returns `Some(200_000)` for any `model_id` starting with `claude-`. This matches
+Anthropic's published context window for all current Claude 3.x / 4.x models.
+The fallback is only applied when the API does not supply a value and only for
+`wire_api == ModelWireApi::Anthropic`.
+
+Files: `codex-rs/models-manager/src/copilot_models.rs`
+
+### How context display flows end-to-end
+
+1. `ResponseEvent::Completed { token_usage }` - emitted by SSE parser
+2. `codex.rs` `update_token_usage_info()` stores it in `TokenUsageInfo.last_token_usage`
+3. `send_token_count_event()` emits `EventMsg::TokenCount`
+4. App-server converts to `ThreadTokenUsageUpdated` notification
+5. TUI adapter stores in `StatusHistoryCell.last_token_usage` + `model_context_window`
+6. `StatusHistoryCell::context_window_spans()` renders "X% left · YK window"
+
+The percentage formula (in `protocol/src/protocol.rs:2225`) subtracts a 12,000-token
+baseline from both the used count and window before computing the ratio, so very
+short turns can show slightly above 100% - this is expected behavior.

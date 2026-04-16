@@ -14,6 +14,7 @@ use codex_client::StreamResponse;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -373,6 +374,17 @@ pub fn spawn_anthropic_stream(
 struct ChatCompletionsChunk {
     id: Option<String>,
     choices: Option<Vec<ChatChoice>>,
+    /// Token usage reported on the final chunk (when `stream_options.include_usage`
+    /// is set, or unconditionally by some providers including Copilot).
+    usage: Option<ChatUsage>,
+}
+
+/// Token usage reported by the Chat Completions API on the final SSE chunk.
+#[derive(Debug, Deserialize)]
+struct ChatUsage {
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    total_tokens: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -413,6 +425,22 @@ struct PendingToolCall {
     arguments: String,
 }
 
+/// Converts Chat Completions `usage` to the internal `TokenUsage` type.
+///
+/// Chat Completions reports `prompt_tokens` (input) and `completion_tokens`
+/// (output). The `cached_input_tokens` and `reasoning_output_tokens` fields
+/// are not available in the standard Chat Completions wire format and default
+/// to zero.
+fn chat_usage_to_token_usage(u: ChatUsage) -> TokenUsage {
+    TokenUsage {
+        input_tokens: u.prompt_tokens,
+        cached_input_tokens: 0,
+        output_tokens: u.completion_tokens,
+        reasoning_output_tokens: 0,
+        total_tokens: u.total_tokens,
+    }
+}
+
 /// Processes a GitHub Copilot Chat Completions SSE stream for Claude models.
 ///
 /// The wire format is standard OpenAI streaming:
@@ -451,6 +479,8 @@ pub async fn process_anthropic_sse(
     // Whether we have seen at least one tool_calls delta (used to distinguish
     // a tool-call turn from a text turn when finish_reason arrives).
     let mut has_tool_calls = false;
+    // Token usage from the last chunk that reported it.
+    let mut last_usage: Option<ChatUsage> = None;
 
     loop {
         let start = Instant::now();
@@ -512,7 +542,7 @@ pub async fn process_anthropic_sse(
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id: response_id.clone(),
-                        token_usage: None,
+                        token_usage: last_usage.take().map(chat_usage_to_token_usage),
                     }))
                     .await;
             }
@@ -531,6 +561,11 @@ pub async fn process_anthropic_sse(
             if response_id.is_empty() {
                 response_id = id;
             }
+        }
+
+        // Accumulate token usage - Copilot reports it on the finish_reason chunk.
+        if let Some(usage) = chunk.usage {
+            last_usage = Some(usage);
         }
 
         let choices = chunk.choices.unwrap_or_default();
@@ -619,7 +654,7 @@ pub async fn process_anthropic_sse(
                     let _ = tx_event
                         .send(Ok(ResponseEvent::Completed {
                             response_id: response_id.clone(),
-                            token_usage: None,
+                            token_usage: last_usage.take().map(chat_usage_to_token_usage),
                         }))
                         .await;
                 }
@@ -652,7 +687,7 @@ pub async fn process_anthropic_sse(
                     let _ = tx_event
                         .send(Ok(ResponseEvent::Completed {
                             response_id: response_id.clone(),
-                            token_usage: None,
+                            token_usage: last_usage.take().map(chat_usage_to_token_usage),
                         }))
                         .await;
                     // Continue draining until [DONE] so we don't leave the stream open.
