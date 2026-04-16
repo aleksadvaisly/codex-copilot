@@ -217,10 +217,16 @@ async fn slash_quit_requests_exit() {
 #[tokio::test]
 async fn slash_logout_requests_logged_out_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let github_copilot_auth = chat.config.codex_home.join("github-copilot-auth.json");
+    std::fs::write(&github_copilot_auth, "copilot-auth").expect("seed copilot auth");
 
     chat.dispatch_command(SlashCommand::Logout);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::LoggedOut)));
+    assert!(
+        !github_copilot_auth.exists(),
+        "expected /logout to remove GitHub Copilot auth"
+    );
 }
 
 #[tokio::test]

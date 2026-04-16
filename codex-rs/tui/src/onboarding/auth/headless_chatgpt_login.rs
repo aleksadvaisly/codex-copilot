@@ -151,10 +151,13 @@ fn device_code_attempt_matches(state: &SignInState, request_id: &str) -> bool {
     matches!(
         state,
         SignInState::ChatGptDeviceCode(state) if state.request_id == request_id
+    ) || matches!(
+        state,
+        SignInState::GitHubCopilotDeviceCode(state) if state.request_id == request_id
     )
 }
 
-fn set_device_code_state_for_active_attempt(
+pub(super) fn set_device_code_state_for_active_attempt(
     sign_in_state: &std::sync::Arc<std::sync::RwLock<SignInState>>,
     request_frame: &crate::tui::FrameRequester,
     request_id: &str,
@@ -165,13 +168,17 @@ fn set_device_code_state_for_active_attempt(
         return false;
     }
 
-    *guard = SignInState::ChatGptDeviceCode(next_state);
+    *guard = match &*guard {
+        SignInState::ChatGptDeviceCode(_) => SignInState::ChatGptDeviceCode(next_state),
+        SignInState::GitHubCopilotDeviceCode(_) => SignInState::GitHubCopilotDeviceCode(next_state),
+        _ => return false,
+    };
     drop(guard);
     request_frame.schedule_frame();
     true
 }
 
-fn set_device_code_error_for_active_attempt(
+pub(super) fn set_device_code_error_for_active_attempt(
     sign_in_state: &std::sync::Arc<std::sync::RwLock<SignInState>>,
     request_frame: &crate::tui::FrameRequester,
     error: &std::sync::Arc<std::sync::RwLock<Option<String>>>,
@@ -199,6 +206,12 @@ mod tests {
 
     fn pending_device_code_state(request_id: &str) -> Arc<RwLock<SignInState>> {
         Arc::new(RwLock::new(SignInState::ChatGptDeviceCode(
+            ContinueWithDeviceCodeState::pending(request_id.to_string()),
+        )))
+    }
+
+    fn pending_github_copilot_device_code_state(request_id: &str) -> Arc<RwLock<SignInState>> {
+        Arc::new(RwLock::new(SignInState::GitHubCopilotDeviceCode(
             ContinueWithDeviceCodeState::pending(request_id.to_string()),
         )))
     }
@@ -259,6 +272,26 @@ mod tests {
         assert!(matches!(
             &*sign_in_state.read().unwrap(),
             SignInState::ChatGptDeviceCode(state) if state.login_id.is_none()
+        ));
+
+        let sign_in_state = pending_github_copilot_device_code_state("request-3");
+        assert_eq!(
+            set_device_code_state_for_active_attempt(
+                &sign_in_state,
+                &request_frame,
+                "request-3",
+                ContinueWithDeviceCodeState::ready(
+                    "request-3".to_string(),
+                    "login-3".to_string(),
+                    "https://github.com/login/device".to_string(),
+                    "WXYZ-1234".to_string(),
+                ),
+            ),
+            true
+        );
+        assert!(matches!(
+            &*sign_in_state.read().unwrap(),
+            SignInState::GitHubCopilotDeviceCode(state) if state.login_id() == Some("login-3")
         ));
     }
 

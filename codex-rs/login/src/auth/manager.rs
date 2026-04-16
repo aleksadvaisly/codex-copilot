@@ -431,14 +431,16 @@ pub fn read_codex_api_key_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
-/// if a file was removed, `Ok(false)` if no auth file was present.
+/// Delete all locally managed auth state inside `codex_home` if it exists.
+///
+/// This clears the configured persistent store, the ephemeral store, and the
+/// GitHub Copilot auth file so a logout consistently removes the active auth
+/// method regardless of which flow produced it.
 pub fn logout(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    storage.delete()
+    logout_all_stores(codex_home, auth_credentials_store_mode)
 }
 
 /// Writes an `auth.json` that contains only the API key.
@@ -606,12 +608,23 @@ fn logout_all_stores(
 ) -> std::io::Result<bool> {
     if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
         let removed_copilot = delete_github_copilot_auth(codex_home)?;
-        return Ok(logout(codex_home, AuthCredentialsStoreMode::Ephemeral)? || removed_copilot);
+        return Ok(
+            delete_auth_storage(codex_home, AuthCredentialsStoreMode::Ephemeral)?
+                || removed_copilot,
+        );
     }
-    let removed_ephemeral = logout(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
-    let removed_managed = logout(codex_home, auth_credentials_store_mode)?;
+    let removed_ephemeral = delete_auth_storage(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
+    let removed_managed = delete_auth_storage(codex_home, auth_credentials_store_mode)?;
     let removed_copilot = delete_github_copilot_auth(codex_home)?;
     Ok(removed_ephemeral || removed_managed || removed_copilot)
+}
+
+fn delete_auth_storage(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<bool> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    storage.delete()
 }
 
 fn load_auth(

@@ -37,7 +37,9 @@ pub enum CargoBinError {
 /// This helper allows callers to transparently support both.
 #[allow(deprecated)]
 pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
-    if name == "codex" && let Ok(path) = cargo_bin("copilot") {
+    if name == "codex"
+        && let Ok(path) = cargo_bin("copilot")
+    {
         return Ok(path);
     }
 

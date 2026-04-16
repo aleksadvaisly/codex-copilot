@@ -80,6 +80,8 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
 use super::onboarding_screen::StepState;
 
 mod headless_chatgpt_login;
+use headless_chatgpt_login::set_device_code_error_for_active_attempt;
+use headless_chatgpt_login::set_device_code_state_for_active_attempt;
 
 #[derive(Clone)]
 pub(crate) enum SignInState {
@@ -361,6 +363,9 @@ impl AuthModeWidget {
     }
 
     fn handle_sign_in_option(&mut self, option: SignInOption) {
+        if self.selectable_sign_in_options().contains(&option) {
+            self.highlighted_mode = option;
+        }
         match option {
             SignInOption::ChatGpt => {
                 if self.is_chatgpt_login_allowed() {
@@ -912,6 +917,12 @@ impl AuthModeWidget {
         }
 
         self.set_error(/*message*/ None);
+        let request_id = Uuid::new_v4().to_string();
+        *self.sign_in_state.write().unwrap() = SignInState::GitHubCopilotDeviceCode(
+            ContinueWithDeviceCodeState::pending(request_id.clone()),
+        );
+        self.request_frame.schedule_frame();
+
         let request_handle = self.app_server_request_handle.clone();
         let sign_in_state = self.sign_in_state.clone();
         let error = self.error.clone();
@@ -924,22 +935,47 @@ impl AuthModeWidget {
                 })
                 .await
             {
-                Ok(LoginAccountResponse::GithubCopilot { .. }) => {
-                    *error.write().unwrap() = None;
-                    *sign_in_state.write().unwrap() = SignInState::GitHubCopilotSuccess;
+                Ok(LoginAccountResponse::GithubCopilot {
+                    login_id,
+                    verification_url,
+                    user_code,
+                }) => {
+                    let updated = set_device_code_state_for_active_attempt(
+                        &sign_in_state,
+                        &request_frame,
+                        &request_id,
+                        ContinueWithDeviceCodeState::ready(
+                            request_id.clone(),
+                            login_id.clone(),
+                            verification_url,
+                            user_code,
+                        ),
+                    );
+                    if updated {
+                        *error.write().unwrap() = None;
+                    } else {
+                        cancel_login_attempt(&request_handle, login_id).await;
+                    }
                 }
                 Ok(other) => {
-                    *sign_in_state.write().unwrap() = SignInState::PickMode;
-                    *error.write().unwrap() = Some(format!(
-                        "Unexpected account/login/start response: {other:?}"
-                    ));
+                    let _updated = set_device_code_error_for_active_attempt(
+                        &sign_in_state,
+                        &request_frame,
+                        &error,
+                        &request_id,
+                        format!("Unexpected account/login/start response: {other:?}"),
+                    );
                 }
                 Err(err) => {
-                    *sign_in_state.write().unwrap() = SignInState::PickMode;
-                    *error.write().unwrap() = Some(err.to_string());
+                    let _updated = set_device_code_error_for_active_attempt(
+                        &sign_in_state,
+                        &request_frame,
+                        &error,
+                        &request_id,
+                        err.to_string(),
+                    );
                 }
             }
-            request_frame.schedule_frame();
         });
     }
 
