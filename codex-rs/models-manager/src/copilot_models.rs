@@ -35,6 +35,8 @@ pub(crate) struct CopilotModel {
 #[derive(Debug, Deserialize)]
 pub(crate) struct CopilotCapabilities {
     #[serde(default)]
+    pub(crate) family: Option<String>,
+    #[serde(default)]
     pub(crate) limits: Option<CopilotLimits>,
     #[serde(default)]
     pub(crate) supports: Option<CopilotSupports>,
@@ -98,6 +100,10 @@ fn should_include_model(model: &CopilotModel) -> bool {
 
 fn translate_model(model: CopilotModel) -> ModelInfo {
     let capabilities = model.capabilities;
+    let supports_gemini_api = capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.family.as_deref())
+        .is_some_and(|family| family.starts_with("gemini-"));
     let limits = capabilities
         .as_ref()
         .and_then(|value| value.limits.as_ref());
@@ -119,7 +125,9 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
         .supported_endpoints
         .iter()
         .any(|endpoint| endpoint == "/v1/messages");
-    let wire_api = if supports_anthropic_api {
+    let wire_api = if supports_gemini_api {
+        ModelWireApi::Gemini
+    } else if supports_anthropic_api {
         ModelWireApi::Anthropic
     } else {
         ModelWireApi::Responses
@@ -145,7 +153,7 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
         supported_reasoning_levels,
         shell_type: ConfigShellToolType::Default,
         visibility: ModelVisibility::List,
-        supported_in_api: supports_responses_api || supports_anthropic_api,
+        supported_in_api: supports_responses_api || supports_anthropic_api || supports_gemini_api,
         priority: if model.preview { 10 } else { 0 },
         additional_speed_tiers: Vec::new(),
         availability_nux: None,
@@ -294,6 +302,7 @@ mod tests {
                   "name": "Claude Sonnet 4.6",
                   "model_picker_enabled": true,
                   "capabilities": {
+                    "family": "claude-sonnet-4.6",
                     "type": "chat",
                     "supports": {
                       "parallel_tool_calls": true,
@@ -308,6 +317,7 @@ mod tests {
                   "name": "Gemini 2.5 Pro",
                   "model_picker_enabled": true,
                   "capabilities": {
+                    "family": "gemini-2.5-pro",
                     "type": "chat",
                     "supports": {
                       "parallel_tool_calls": true,
@@ -344,10 +354,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("claude-sonnet-4.6", true),
-                ("gemini-2.5-pro", false),
+                ("gemini-2.5-pro", true),
                 ("gpt-4o", false),
             ]
         );
+
+        assert!(matches!(models[1].wire_api, ModelWireApi::Gemini));
     }
 
     #[test]

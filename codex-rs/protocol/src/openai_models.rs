@@ -28,6 +28,7 @@ pub enum ModelWireApi {
     #[default]
     Responses,
     Anthropic,
+    Gemini,
 }
 
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning

@@ -9,7 +9,7 @@ pub fn auth_provider_from_auth(
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<CoreAuthProvider> {
     let (token_header_name, token_prefix) = match provider.wire_api {
-        WireApi::Responses => (None, None),
+        WireApi::Responses | WireApi::Gemini => (None, None),
         WireApi::Anthropic => (Some("x-api-key"), Some("")),
     };
 

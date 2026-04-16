@@ -54,6 +54,8 @@ pub enum WireApi {
     Responses,
     /// Anthropic's Messages API exposed at `/v1/messages`.
     Anthropic,
+    /// Gemini models exposed through GitHub Copilot's Chat Completions gateway.
+    Gemini,
 }
 
 impl fmt::Display for WireApi {
@@ -61,6 +63,7 @@ impl fmt::Display for WireApi {
         let value = match self {
             Self::Responses => "responses",
             Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
         };
         f.write_str(value)
     }
@@ -75,10 +78,11 @@ impl<'de> Deserialize<'de> for WireApi {
         match value.as_str() {
             "responses" => Ok(Self::Responses),
             "anthropic" => Ok(Self::Anthropic),
+            "gemini" => Ok(Self::Gemini),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
             _ => Err(serde::de::Error::unknown_variant(
                 &value,
-                &["responses", "anthropic"],
+                &["responses", "anthropic", "gemini"],
             )),
         }
     }
@@ -86,7 +90,7 @@ impl<'de> Deserialize<'de> for WireApi {
 
 impl WireApi {
     pub fn supports_reasoning_controls(self) -> bool {
-        matches!(self, Self::Responses)
+        matches!(self, Self::Responses | Self::Gemini)
     }
 }
 

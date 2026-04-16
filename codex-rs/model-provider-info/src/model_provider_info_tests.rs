@@ -130,6 +130,18 @@ wire_api = "anthropic"
 }
 
 #[test]
+fn test_deserialize_gemini_wire_api() {
+    let provider_toml = r#"
+name = "GitHub Copilot Gemini"
+base_url = "https://api.githubcopilot.com"
+wire_api = "gemini"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.wire_api, WireApi::Gemini);
+}
+
+#[test]
 fn test_deserialize_websocket_connect_timeout() {
     let provider_toml = r#"
 name = "OpenAI"

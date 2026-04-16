@@ -174,6 +174,7 @@ struct CurrentClientSetup {
 enum StreamRoute {
     Responses,
     Anthropic,
+    Gemini,
 }
 
 impl From<WireApi> for StreamRoute {
@@ -181,6 +182,7 @@ impl From<WireApi> for StreamRoute {
         match value {
             WireApi::Responses => Self::Responses,
             WireApi::Anthropic => Self::Anthropic,
+            WireApi::Gemini => Self::Gemini,
         }
     }
 }
@@ -190,6 +192,7 @@ impl From<ModelWireApi> for StreamRoute {
         match value {
             ModelWireApi::Responses => Self::Responses,
             ModelWireApi::Anthropic => Self::Anthropic,
+            ModelWireApi::Gemini => Self::Gemini,
         }
     }
 }
@@ -1582,6 +1585,10 @@ impl ModelClientSession {
                 .await
             }
             StreamRoute::Anthropic => {
+                self.stream_anthropic(prompt, model_info, session_telemetry, turn_metadata_header)
+                    .await
+            }
+            StreamRoute::Gemini => {
                 self.stream_anthropic(prompt, model_info, session_telemetry, turn_metadata_header)
                     .await
             }

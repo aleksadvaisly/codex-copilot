@@ -130,6 +130,13 @@ Uważamy plan za gotowy, gdy:
 - Gemini ma osobny path streamingowy w core.
 - Testy potwierdzają, że Gemini nie jest filtrowane jak zwykły OpenAI Responses model.
 
+## Status implementacji
+
+- `WireApi::Gemini` jest już dodane do konfiguracji providera.
+- Copilot `/models` rozpoznaje Gemini po `capabilities.family` i oznacza je jako `supported_in_api`.
+- Core ma teraz osobny `StreamRoute::Gemini`, choć pierwszy przebieg nadal korzysta z tego samego chat-completions transportu co path Anthropic.
+- Następny krok to wydzielenie prawdziwie Gemini-native serializera, jeśli okaże się potrzebny poza tym wspólnym transportem.
+
 ## Uwaga
 
 Ten plan zakłada, że Gemini ma być dodane jako native wire API, a nie jako specjalny przypadek w filtrze modeli. Jeśli później okaże się, że potrzebny jest inny kształt endpointów lub auth, zmieniamy tylko adapter, nie wspólny model turnów.
