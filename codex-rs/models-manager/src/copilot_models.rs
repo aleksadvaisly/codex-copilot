@@ -112,6 +112,14 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
     let supports_image_detail_original = supports.is_some_and(|value| value.vision);
     let context_window =
         limits.and_then(|value| value.max_prompt_tokens.or(value.max_context_window_tokens));
+    let supports_responses_api = model
+        .supported_endpoints
+        .iter()
+        .any(|endpoint| endpoint == "/responses");
+    let supports_anthropic_api = model
+        .supported_endpoints
+        .iter()
+        .any(|endpoint| endpoint == "/v1/messages");
 
     ModelInfo {
         slug: model.id.clone(),
@@ -121,10 +129,7 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
         supported_reasoning_levels,
         shell_type: ConfigShellToolType::Default,
         visibility: ModelVisibility::List,
-        supported_in_api: model
-            .supported_endpoints
-            .iter()
-            .any(|endpoint| endpoint == "/responses"),
+        supported_in_api: supports_responses_api || supports_anthropic_api,
         priority: if model.preview { 10 } else { 0 },
         additional_speed_tiers: Vec::new(),
         availability_nux: None,
@@ -244,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn marks_non_responses_models_as_unsupported_in_api() {
+    fn marks_messages_api_models_as_supported_in_api() {
         let response: CopilotModelsResponse = serde_json::from_str(
             r#"{
               "object": "list",
@@ -303,10 +308,41 @@ mod tests {
                 .map(|model| (model.slug.as_str(), model.supported_in_api))
                 .collect::<Vec<_>>(),
             vec![
-                ("claude-sonnet-4.6", false),
+                ("claude-sonnet-4.6", true),
                 ("gemini-2.5-pro", false),
                 ("gpt-4o", false),
             ]
         );
+    }
+
+    #[test]
+    fn marks_anthropic_messages_models_as_supported_in_api() {
+        let response: CopilotModelsResponse = serde_json::from_str(
+            r#"{
+              "object": "list",
+              "data": [
+                {
+                  "id": "claude-sonnet-4.6",
+                  "name": "Claude Sonnet 4.6",
+                  "model_picker_enabled": true,
+                  "capabilities": {
+                    "type": "chat",
+                    "supports": {
+                      "parallel_tool_calls": true,
+                      "reasoning_effort": ["low", "medium", "high"],
+                      "vision": true
+                    }
+                  },
+                  "supported_endpoints": ["/v1/messages"]
+                }
+              ]
+            }"#,
+        )
+        .expect("valid response");
+
+        let models = translate_models(response);
+
+        assert_eq!(models.len(), 1);
+        assert!(models[0].supported_in_api);
     }
 }
