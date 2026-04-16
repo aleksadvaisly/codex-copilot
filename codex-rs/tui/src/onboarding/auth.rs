@@ -1135,7 +1135,7 @@ mod tests {
 
         let mut terminal = Terminal::new(VT100Backend::new(80, 18)).expect("terminal");
         terminal
-            .draw(|frame| frame.render_widget_ref(&widget, frame.area()))
+            .draw(|frame| frame.render_widget_ref(widget.clone(), frame.area()))
             .expect("render auth widget");
 
         insta::assert_snapshot!("auth_mode_pick_mode", terminal.backend());
@@ -1158,19 +1158,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn github_copilot_flow_reports_not_available() {
+    async fn github_copilot_flow_starts_device_code_sign_in() {
         let (mut widget, _tmp) = widget_with_all_options().await;
 
         widget.handle_sign_in_option(SignInOption::GitHubCopilot);
 
-        assert_eq!(
-            widget.error_message().as_deref(),
-            Some(GITHUB_COPILOT_UNAVAILABLE_MESSAGE)
-        );
         assert_eq!(widget.highlighted_mode, SignInOption::GitHubCopilot);
         assert!(matches!(
             &*widget.sign_in_state.read().unwrap(),
-            SignInState::PickMode
+            SignInState::GitHubCopilotDeviceCode(_) | SignInState::GitHubCopilotSuccess
         ));
     }
 

@@ -241,7 +241,7 @@ impl ChatWidget {
                 ) {
                     tracing::error!("failed to logout: {e}");
                 }
-                self.request_quit_without_confirmation();
+                self.app_event_tx.send(AppEvent::Exit(ExitMode::LoggedOut));
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));

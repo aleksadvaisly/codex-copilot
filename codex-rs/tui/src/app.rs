@@ -318,6 +318,7 @@ pub(crate) enum AppRunControl {
 #[derive(Debug, Clone)]
 pub enum ExitReason {
     UserRequested,
+    LoggedOut,
     Fatal(String),
 }
 
@@ -5834,6 +5835,15 @@ impl App {
                 }
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
+            }
+            ExitMode::LoggedOut => {
+                self.pending_shutdown_exit_thread_id =
+                    self.active_thread_id.or(self.chat_widget.thread_id());
+                if self.pending_shutdown_exit_thread_id.is_some() {
+                    self.shutdown_current_thread(app_server).await;
+                }
+                self.pending_shutdown_exit_thread_id = None;
+                AppRunControl::Exit(ExitReason::LoggedOut)
             }
             ExitMode::Immediate => {
                 self.pending_shutdown_exit_thread_id = None;

@@ -64,6 +64,9 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("ERROR: {message}");
                 std::process::exit(1);
             }
+            ExitReason::LoggedOut => {
+                println!("Logged out. Start Codex again to see the sign-in screen.");
+            }
             ExitReason::UserRequested => {}
         }
 
