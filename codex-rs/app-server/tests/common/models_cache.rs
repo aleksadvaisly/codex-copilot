@@ -7,6 +7,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use serde_json::json;
@@ -49,6 +50,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        wire_api: ModelWireApi::Responses,
     }
 }
 

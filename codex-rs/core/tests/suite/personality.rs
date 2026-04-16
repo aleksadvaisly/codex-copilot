@@ -8,6 +8,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -643,6 +644,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        wire_api: ModelWireApi::Responses,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         upgrade: None,
@@ -760,6 +762,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        wire_api: ModelWireApi::Responses,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         upgrade: None,

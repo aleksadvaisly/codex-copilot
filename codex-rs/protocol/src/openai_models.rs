@@ -22,6 +22,14 @@ use crate::config_types::Verbosity;
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 pub const SPEED_TIER_FAST: &str = "fast";
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelWireApi {
+    #[default]
+    Responses,
+    Anthropic,
+}
+
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
     Debug,
@@ -297,6 +305,8 @@ pub struct ModelInfo {
     pub used_fallback_model_metadata: bool,
     #[serde(default)]
     pub supports_search_tool: bool,
+    #[serde(default)]
+    pub wire_api: ModelWireApi,
 }
 
 impl ModelInfo {
@@ -561,6 +571,7 @@ mod tests {
             input_modalities: default_input_modalities(),
             used_fallback_model_metadata: false,
             supports_search_tool: false,
+            wire_api: ModelWireApi::Responses,
         }
     }
 

@@ -9,6 +9,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -1324,6 +1325,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         input_modalities: vec![InputModality::Text],
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        wire_api: ModelWireApi::Responses,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         upgrade: None,

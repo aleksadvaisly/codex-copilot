@@ -15,6 +15,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -296,6 +297,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        wire_api: ModelWireApi::Responses,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         upgrade: None,
@@ -545,6 +547,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        wire_api: ModelWireApi::Responses,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         upgrade: None,
@@ -1028,6 +1031,7 @@ fn test_remote_model_with_policy(
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        wire_api: ModelWireApi::Responses,
         priority,
         additional_speed_tiers: Vec::new(),
         upgrade: None,

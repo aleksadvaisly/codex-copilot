@@ -4,6 +4,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -120,6 +121,11 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
         .supported_endpoints
         .iter()
         .any(|endpoint| endpoint == "/v1/messages");
+    let wire_api = if supports_anthropic_api {
+        ModelWireApi::Anthropic
+    } else {
+        ModelWireApi::Responses
+    };
 
     ModelInfo {
         slug: model.id.clone(),
@@ -156,6 +162,7 @@ fn translate_model(model: CopilotModel) -> ModelInfo {
         },
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        wire_api,
     }
 }
 

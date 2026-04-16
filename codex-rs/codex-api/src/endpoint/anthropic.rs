@@ -110,6 +110,7 @@ impl<T: HttpTransport, A: AuthProvider> AnthropicClient<T, A> {
             turn_state,
         } = options;
 
+        let system = anthropic_system_from_input(&input, system);
         let messages = anthropic_messages_from_input(input);
         let body = AnthropicRequest {
             model,
@@ -141,12 +142,14 @@ impl<T: HttpTransport, A: AuthProvider> AnthropicClient<T, A> {
         let request = serde_json::to_value(body).map_err(|err| {
             ApiError::Stream(format!("failed to encode anthropic request: {err}"))
         })?;
+        let mut request_headers = self.provider.headers.clone();
+        request_headers.extend(headers);
         let request = add_auth_headers(
             &self.auth,
             codex_client::Request {
                 method: Method::POST,
                 url: self.provider.url_for_path("v1/messages"),
-                headers,
+                headers: request_headers,
                 body: Some(codex_client::RequestBody::Json(request)),
                 compression: RequestCompression::None,
                 timeout: None,
@@ -166,16 +169,10 @@ fn anthropic_messages_from_input(input: Vec<ResponseItem>) -> Vec<AnthropicMessa
     input
         .into_iter()
         .filter_map(|item| match item {
-            ResponseItem::Message { role, content, .. } => {
-                let text = content
-                    .into_iter()
-                    .filter_map(|content| match content {
-                        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                            Some(text)
-                        }
-                        _ => None,
-                    })
-                    .collect::<String>();
+            ResponseItem::Message { role, content, .. }
+                if !matches!(role.as_str(), "system" | "developer") =>
+            {
+                let text = text_from_content(&content);
                 if text.is_empty() {
                     None
                 } else {
@@ -188,6 +185,84 @@ fn anthropic_messages_from_input(input: Vec<ResponseItem>) -> Vec<AnthropicMessa
             _ => None,
         })
         .collect()
+}
+
+fn anthropic_system_from_input(input: &[ResponseItem], system: String) -> String {
+    let mut sections = Vec::new();
+    if !system.is_empty() {
+        sections.push(system);
+    }
+
+    let transcript_system = input
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. }
+                if matches!(role.as_str(), "system" | "developer") =>
+            {
+                let text = text_from_content(content);
+                (!text.is_empty()).then_some(text)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    if !transcript_system.is_empty() {
+        sections.push(transcript_system.join("\n\n"));
+    }
+
+    sections.join("\n\n")
+}
+
+fn text_from_content(content: &[ContentItem]) -> String {
+    content
+        .iter()
+        .filter_map(|content| match content {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::anthropic_messages_from_input;
+    use super::anthropic_system_from_input;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn developer_messages_move_to_system_and_do_not_leak_into_messages() {
+        let input = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Follow repo policy".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hey".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+
+        let system = anthropic_system_from_input(&input, "Base instructions".to_string());
+        let messages = anthropic_messages_from_input(input);
+
+        assert_eq!(system, "Base instructions\n\nFollow repo policy");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "user");
+    }
 }
 
 pub fn spawn_anthropic_stream(

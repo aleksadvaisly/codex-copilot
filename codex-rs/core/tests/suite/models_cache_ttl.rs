@@ -12,6 +12,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -334,6 +335,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        wire_api: ModelWireApi::Responses,
         priority,
         additional_speed_tiers: Vec::new(),
         upgrade: None,

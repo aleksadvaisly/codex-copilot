@@ -20,6 +20,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -857,6 +858,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 shell_type: ConfigShellToolType::Default,
                 visibility: ModelVisibility::List,
                 supported_in_api: true,
+                wire_api: ModelWireApi::Responses,
                 priority: 1,
                 additional_speed_tiers: Vec::new(),
                 upgrade: None,

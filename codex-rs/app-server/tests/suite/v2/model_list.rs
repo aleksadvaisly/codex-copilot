@@ -19,6 +19,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -111,6 +112,7 @@ fn test_model_info(slug: &str, supported_in_api: bool) -> ModelInfo {
         input_modalities: vec![InputModality::Text],
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        wire_api: ModelWireApi::Responses,
     }
 }
 

@@ -73,6 +73,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -179,6 +180,15 @@ impl From<WireApi> for StreamRoute {
         match value {
             WireApi::Responses => Self::Responses,
             WireApi::Anthropic => Self::Anthropic,
+        }
+    }
+}
+
+impl From<ModelWireApi> for StreamRoute {
+    fn from(value: ModelWireApi) -> Self {
+        match value {
+            ModelWireApi::Responses => Self::Responses,
+            ModelWireApi::Anthropic => Self::Anthropic,
         }
     }
 }
@@ -1530,7 +1540,7 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
-        let stream_route = StreamRoute::from(self.client.state.provider.wire_api);
+        let stream_route = StreamRoute::from(model_info.wire_api);
         match stream_route {
             StreamRoute::Responses => {
                 if self.client.responses_websocket_enabled() {
