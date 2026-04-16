@@ -73,6 +73,8 @@ fn expected_visible_models() -> Vec<Model> {
     // Mirror `ModelsManager::build_available_models()` default selection after auth filtering.
     ModelPreset::mark_default_by_picker_visibility(&mut presets);
 
+    presets.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+
     presets
         .iter()
         .filter(|preset| preset.show_in_picker)

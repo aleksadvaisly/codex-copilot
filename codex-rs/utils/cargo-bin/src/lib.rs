@@ -37,6 +37,10 @@ pub enum CargoBinError {
 /// This helper allows callers to transparently support both.
 #[allow(deprecated)]
 pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
+    if name == "codex" && let Ok(path) = cargo_bin("copilot") {
+        return Ok(path);
+    }
+
     let env_keys = cargo_bin_env_keys(name);
     for key in &env_keys {
         if let Some(value) = std::env::var_os(key) {

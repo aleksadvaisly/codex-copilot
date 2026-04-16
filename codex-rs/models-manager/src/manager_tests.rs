@@ -352,11 +352,11 @@ async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
 }
 
 #[tokio::test]
-async fn refresh_available_models_sorts_by_priority() {
+async fn refresh_available_models_sorts_alphabetically() {
     let server = MockServer::start().await;
     let remote_models = vec![
-        remote_model("priority-low", "Low", /*priority*/ 1),
-        remote_model("priority-high", "High", /*priority*/ 0),
+        remote_model("zebra", "Zebra", /*priority*/ 1),
+        remote_model("alpha", "Alpha", /*priority*/ 0),
     ];
     let models_mock = mount_models_once(
         &server,
@@ -384,18 +384,11 @@ async fn refresh_available_models_sorts_by_priority() {
     assert_models_contain(&cached_remote, &remote_models);
 
     let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
-    let high_idx = available
+    let names = available
         .iter()
-        .position(|model| model.model == "priority-high")
-        .expect("priority-high should be listed");
-    let low_idx = available
-        .iter()
-        .position(|model| model.model == "priority-low")
-        .expect("priority-low should be listed");
-    assert!(
-        high_idx < low_idx,
-        "higher priority should be listed before lower priority"
-    );
+        .map(|model| model.display_name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["Alpha", "Zebra"]);
     assert_eq!(
         models_mock.requests().len(),
         1,

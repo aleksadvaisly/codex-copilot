@@ -12,7 +12,6 @@ use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
 use codex_client::StreamResponse;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use eventsource_stream::Eventsource;
@@ -277,8 +276,9 @@ fn chat_messages_from_input(
     for item in input {
         match item {
             // system/developer already handled above.
-            ResponseItem::Message { role, content, .. }
-                if matches!(role.as_str(), "system" | "developer") => {}
+            ResponseItem::Message {
+                role, content: _, ..
+            } if matches!(role.as_str(), "system" | "developer") => {}
 
             ResponseItem::Message { role, content, .. } => {
                 flush_tool_calls(&mut pending_tool_calls, &mut messages);
@@ -478,7 +478,6 @@ pub async fn process_anthropic_sse(
     let mut tool_calls_by_index: HashMap<usize, PendingToolCall> = HashMap::new();
     // Whether we have seen at least one tool_calls delta (used to distinguish
     // a tool-call turn from a text turn when finish_reason arrives).
-    let mut has_tool_calls = false;
     // Token usage from the last chunk that reported it.
     let mut last_usage: Option<ChatUsage> = None;
 
@@ -577,7 +576,6 @@ pub async fn process_anthropic_sse(
         // --- Accumulate tool-call fragments ---
         if let Some(ref delta) = choice.delta {
             for tc in &delta.tool_calls {
-                has_tool_calls = true;
                 let entry = tool_calls_by_index.entry(tc.index).or_default();
                 if let Some(ref id) = tc.id {
                     entry.id = id.clone();

@@ -619,6 +619,7 @@ impl ModelsManager {
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
+        presets.sort_by(|a, b| a.display_name.cmp(&b.display_name));
 
         ModelPreset::mark_default_by_picker_visibility(&mut presets);
 
