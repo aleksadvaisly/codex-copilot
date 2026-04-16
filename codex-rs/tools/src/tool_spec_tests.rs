@@ -291,3 +291,81 @@ fn tool_search_tool_spec_serializes_expected_wire_shape() {
         })
     );
 }
+
+#[test]
+fn chat_completions_function_tool_has_nested_function_key() {
+    use crate::create_tools_json_for_chat_completions;
+    use std::collections::BTreeMap;
+
+    let tools = vec![ToolSpec::Function(ResponsesApiTool {
+        name: "shell".to_string(),
+        description: "Run a shell command".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::from([("cmd".to_string(), JsonSchema::string(None))]),
+            Some(vec!["cmd".to_string()]),
+            None,
+        ),
+        output_schema: None,
+    })];
+
+    let result = create_tools_json_for_chat_completions(&tools);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0]["type"], "function");
+    assert_eq!(result[0]["function"]["name"], "shell");
+    assert_eq!(result[0]["function"]["description"], "Run a shell command");
+    assert!(result[0]["function"]["parameters"].is_object());
+    // Must NOT have a top-level "name" - that is the Responses API shape.
+    assert!(result[0].get("name").is_none());
+}
+
+#[test]
+fn chat_completions_namespace_tools_are_flattened() {
+    use crate::create_tools_json_for_chat_completions;
+    use std::collections::BTreeMap;
+
+    let inner = ResponsesApiTool {
+        name: "ns.read".to_string(),
+        description: "Read".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(BTreeMap::new(), None, None),
+        output_schema: None,
+    };
+    let tools = vec![ToolSpec::Namespace(ResponsesApiNamespace {
+        name: "ns".to_string(),
+        description: "A namespace".to_string(),
+        tools: vec![ResponsesApiNamespaceTool::Function(inner)],
+    })];
+
+    let result = create_tools_json_for_chat_completions(&tools);
+    assert_eq!(
+        result.len(),
+        1,
+        "namespace should be flattened to its inner tool"
+    );
+    assert_eq!(result[0]["function"]["name"], "ns.read");
+}
+
+#[test]
+fn chat_completions_skips_local_shell_and_web_search() {
+    use crate::create_tools_json_for_chat_completions;
+
+    let tools = vec![
+        ToolSpec::LocalShell {},
+        ToolSpec::WebSearch {
+            external_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        },
+    ];
+
+    let result = create_tools_json_for_chat_completions(&tools);
+    assert!(
+        result.is_empty(),
+        "LocalShell and WebSearch must be skipped"
+    );
+}

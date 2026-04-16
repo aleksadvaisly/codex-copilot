@@ -78,6 +78,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_tools::create_tools_json_for_chat_completions;
 use codex_tools::create_tools_json_for_responses_api;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
@@ -1294,7 +1295,10 @@ impl ModelClientSession {
                     model_info.slug.clone(),
                     prompt.base_instructions.text.clone(),
                     prompt.get_formatted_input(),
-                    Default::default(),
+                    codex_api::AnthropicOptions {
+                        tools: create_tools_json_for_chat_completions(&prompt.tools),
+                        ..Default::default()
+                    },
                 )
                 .await;
 

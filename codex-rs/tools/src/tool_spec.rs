@@ -1,6 +1,7 @@
 use crate::FreeformTool;
 use crate::JsonSchema;
 use crate::ResponsesApiNamespace;
+use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchContextSize;
@@ -151,6 +152,62 @@ pub fn create_tools_json_for_responses_api(
     }
 
     Ok(tools_json)
+}
+
+/// Returns JSON values that are compatible with OpenAI Chat Completions
+/// function calling format:
+/// `{type: "function", function: {name, description, parameters}}`
+///
+/// Only `Function` and `Freeform` variants are representable in Chat
+/// Completions. Namespace tools are flattened into individual entries.
+/// `LocalShell`, `WebSearch`, `ImageGeneration`, and `ToolSearch` have no
+/// Chat Completions equivalent and are silently skipped.
+pub fn create_tools_json_for_chat_completions(tools: &[ToolSpec]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for spec in tools {
+        match spec {
+            ToolSpec::Function(tool) => {
+                out.push(responses_api_tool_to_chat_completions(tool));
+            }
+            ToolSpec::Namespace(ns) => {
+                for inner in &ns.tools {
+                    match inner {
+                        ResponsesApiNamespaceTool::Function(tool) => {
+                            out.push(responses_api_tool_to_chat_completions(tool));
+                        }
+                    }
+                }
+            }
+            ToolSpec::Freeform(tool) => {
+                out.push(serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": { "type": "object", "properties": {} }
+                    }
+                }));
+            }
+            ToolSpec::LocalShell {}
+            | ToolSpec::ImageGeneration { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::ToolSearch { .. } => {}
+        }
+    }
+    out
+}
+
+fn responses_api_tool_to_chat_completions(tool: &ResponsesApiTool) -> Value {
+    let parameters = serde_json::to_value(&tool.parameters)
+        .unwrap_or_else(|_| serde_json::json!({"type": "object", "properties": {}}));
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": parameters
+        }
+    })
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

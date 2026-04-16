@@ -12,6 +12,7 @@ use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
 use codex_client::StreamResponse;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -20,6 +21,8 @@ use http::HeaderValue;
 use http::Method;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -40,6 +43,10 @@ pub struct AnthropicOptions {
     pub conversation_id: Option<String>,
     pub extra_headers: HeaderMap,
     pub turn_state: Option<Arc<OnceLock<String>>>,
+    /// Tools to advertise to the model. These are serialized in Chat Completions
+    /// format (`{type: "function", function: {name, description, parameters}}`),
+    /// which differs from the Responses API format used elsewhere in codex-rs.
+    pub tools: Vec<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,12 +55,68 @@ struct ChatCompletionsRequest {
     messages: Vec<ChatMessage>,
     stream: bool,
     max_tokens: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<Value>,
 }
 
+/// A single message in the Chat Completions message list.
+///
+/// The `content` field is `Option<String>` because assistant messages that
+/// contain tool calls have `content: null` on the wire.
 #[derive(Debug, Serialize)]
 struct ChatMessage {
     role: String,
-    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    /// Present only on assistant messages that contain tool calls.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<ChatToolCall>,
+    /// Present only on tool-result messages (role == "tool").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+impl ChatMessage {
+    fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: Some(content.into()),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }
+    }
+
+    fn tool_result(call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: Some(content.into()),
+            tool_calls: vec![],
+            tool_call_id: Some(call_id.into()),
+        }
+    }
+
+    fn assistant_with_tool_calls(calls: Vec<ChatToolCall>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: calls,
+            tool_call_id: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ChatToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    function: ChatToolCallFunction,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatToolCallFunction {
+    name: String,
+    arguments: String,
 }
 
 pub struct AnthropicClient<T: HttpTransport, A: AuthProvider> {
@@ -103,6 +166,7 @@ impl<T: HttpTransport, A: AuthProvider> AnthropicClient<T, A> {
             conversation_id,
             extra_headers,
             turn_state,
+            tools,
         } = options;
 
         let messages = chat_messages_from_input(input, system);
@@ -111,6 +175,7 @@ impl<T: HttpTransport, A: AuthProvider> AnthropicClient<T, A> {
             messages,
             stream: true,
             max_tokens: 4_096,
+            tools,
         };
 
         let mut headers = extra_headers;
@@ -154,11 +219,22 @@ impl<T: HttpTransport, A: AuthProvider> AnthropicClient<T, A> {
     }
 }
 
+/// Converts a slice of `ToolSpec` values into the Chat Completions `tools`
+/// array, flattening namespaces and skipping unsupported variants.
+/// This conversion is performed in `codex-tools` as
+/// `create_tools_json_for_chat_completions` and the result is passed here
+/// as a pre-serialized `Vec<Value>` via `AnthropicOptions::tools`.
+
 /// Builds the OpenAI Chat Completions message list from a `Prompt` input.
 ///
-/// `system`/`developer` role items and the `base_instructions` string are
-/// merged into a single leading `system` message. All other roles
-/// (`user`/`assistant`) are forwarded as-is.
+/// Mapping rules:
+/// - `system`/`developer` role `Message` items and `base_instructions` are
+///   merged into a single leading `system` message.
+/// - `user`/`assistant` role `Message` items are forwarded as text messages.
+/// - `FunctionCall` items become `assistant` messages with a `tool_calls` array.
+/// - `FunctionCallOutput` / `CustomToolCallOutput` items become `tool` messages.
+/// - `CustomToolCall` items become `assistant` messages with a `tool_calls` array.
+/// - All other item types are silently skipped (no Chat Completions equivalent).
 fn chat_messages_from_input(
     input: Vec<ResponseItem>,
     base_instructions: String,
@@ -182,26 +258,88 @@ fn chat_messages_from_input(
     let mut messages: Vec<ChatMessage> = Vec::new();
 
     if !system_sections.is_empty() {
-        messages.push(ChatMessage {
-            role: "system".to_string(),
-            content: system_sections.join("\n\n"),
-        });
+        messages.push(ChatMessage::text("system", system_sections.join("\n\n")));
     }
 
+    // Accumulate consecutive FunctionCall / CustomToolCall items so they can
+    // be batched into a single assistant message with multiple tool_calls.
+    let mut pending_tool_calls: Vec<ChatToolCall> = Vec::new();
+
+    let flush_tool_calls = |pending: &mut Vec<ChatToolCall>, messages: &mut Vec<ChatMessage>| {
+        if !pending.is_empty() {
+            messages.push(ChatMessage::assistant_with_tool_calls(std::mem::take(
+                pending,
+            )));
+        }
+    };
+
     for item in input {
-        if let ResponseItem::Message { role, content, .. } = item {
-            if matches!(role.as_str(), "system" | "developer") {
-                continue;
+        match item {
+            // system/developer already handled above.
+            ResponseItem::Message { role, content, .. }
+                if matches!(role.as_str(), "system" | "developer") => {}
+
+            ResponseItem::Message { role, content, .. } => {
+                flush_tool_calls(&mut pending_tool_calls, &mut messages);
+                let text = text_from_content(&content);
+                if !text.is_empty() {
+                    messages.push(ChatMessage::text(role, text));
+                }
             }
-            let text = text_from_content(&content);
-            if !text.is_empty() {
-                messages.push(ChatMessage {
-                    role,
-                    content: text,
+
+            // Model-initiated function call (Responses API tool).
+            ResponseItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+                ..
+            } => {
+                pending_tool_calls.push(ChatToolCall {
+                    id: call_id,
+                    kind: "function".to_string(),
+                    function: ChatToolCallFunction { name, arguments },
                 });
             }
+
+            // MCP / custom tool call.
+            ResponseItem::CustomToolCall {
+                call_id,
+                name,
+                input,
+                ..
+            } => {
+                pending_tool_calls.push(ChatToolCall {
+                    id: call_id,
+                    kind: "function".to_string(),
+                    function: ChatToolCallFunction {
+                        name,
+                        arguments: input,
+                    },
+                });
+            }
+
+            // Tool result for a Responses API tool call.
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                flush_tool_calls(&mut pending_tool_calls, &mut messages);
+                let content = output.body.to_text().unwrap_or_default();
+                messages.push(ChatMessage::tool_result(call_id, content));
+            }
+
+            // Tool result for an MCP / custom tool call.
+            ResponseItem::CustomToolCallOutput {
+                call_id, output, ..
+            } => {
+                flush_tool_calls(&mut pending_tool_calls, &mut messages);
+                let content = output.body.to_text().unwrap_or_default();
+                messages.push(ChatMessage::tool_result(call_id, content));
+            }
+
+            // All other variants have no Chat Completions equivalent.
+            _ => {}
         }
     }
+
+    flush_tool_calls(&mut pending_tool_calls, &mut messages);
 
     messages
 }
@@ -218,6 +356,315 @@ fn text_from_content(content: &[ContentItem]) -> String {
         .collect()
 }
 
+pub fn spawn_anthropic_stream(
+    stream_response: StreamResponse,
+    idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+) -> ResponseStream {
+    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
+    tokio::spawn(async move {
+        process_anthropic_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
+    });
+    ResponseStream { rx_event }
+}
+
+/// Deserialised Chat Completions SSE chunk (streaming delta).
+#[derive(Debug, Deserialize)]
+struct ChatCompletionsChunk {
+    id: Option<String>,
+    choices: Option<Vec<ChatChoice>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatChoice {
+    delta: Option<ChatDelta>,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatDelta {
+    content: Option<String>,
+    /// Incremental tool-call fragments. Each element corresponds to one tool
+    /// call identified by `index`. The `id` and `function.name` fields arrive
+    /// only on the first chunk for a given index; subsequent chunks carry only
+    /// `function.arguments` fragments.
+    #[serde(default)]
+    tool_calls: Vec<ChatToolCallDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatToolCallDelta {
+    index: usize,
+    id: Option<String>,
+    function: Option<ChatToolCallFunctionDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatToolCallFunctionDelta {
+    name: Option<String>,
+    arguments: Option<String>,
+}
+
+/// In-progress accumulation state for a single tool call being streamed.
+#[derive(Debug, Default)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+/// Processes a GitHub Copilot Chat Completions SSE stream for Claude models.
+///
+/// The wire format is standard OpenAI streaming:
+/// - Each `data:` line carries a `ChatCompletionsChunk` JSON object.
+/// - `choices[0].delta.content` carries incremental text.
+/// - `choices[0].delta.tool_calls` carries incremental tool-call fragments.
+/// - `choices[0].finish_reason == "stop"` signals end-of-turn (text only).
+/// - `choices[0].finish_reason == "tool_calls"` signals the model wants to
+///   invoke one or more tools.
+/// - The final sentinel `data: [DONE]` marks stream close.
+///
+/// Event sequence emitted for a text turn:
+/// 1. `Created`
+/// 2. `OutputItemAdded` (empty assistant message)
+/// 3. `OutputTextDelta` (one per content chunk)
+/// 4. `OutputItemDone` (full assembled message)
+/// 5. `Completed`
+///
+/// Event sequence emitted for a tool-call turn:
+/// 1. `Created`
+/// 2. For each tool call: `OutputItemAdded(FunctionCall)` then `OutputItemDone(FunctionCall)`
+/// 3. `Completed`
+pub async fn process_anthropic_sse(
+    stream: codex_client::ByteStream,
+    tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+) {
+    let mut stream = stream.eventsource();
+    let mut response_id = String::new();
+    let mut text = String::new();
+    let mut item_opened = false;
+    let mut completed = false;
+    // tool_calls_by_index accumulates streaming tool-call fragments.
+    let mut tool_calls_by_index: HashMap<usize, PendingToolCall> = HashMap::new();
+    // Whether we have seen at least one tool_calls delta (used to distinguish
+    // a tool-call turn from a text turn when finish_reason arrives).
+    let mut has_tool_calls = false;
+
+    loop {
+        let start = Instant::now();
+        let response = timeout(idle_timeout, stream.next()).await;
+        if let Some(t) = telemetry.as_ref() {
+            t.on_sse_poll(&response, start.elapsed());
+        }
+        let sse = match response {
+            Ok(Some(Ok(sse))) => sse,
+            Ok(Some(Err(e))) => {
+                let _ = tx_event.send(Err(ApiError::Stream(e.to_string()))).await;
+                return;
+            }
+            Ok(None) => {
+                if !completed {
+                    let _ = tx_event
+                        .send(Err(ApiError::Stream(
+                            "stream closed before completion".into(),
+                        )))
+                        .await;
+                }
+                return;
+            }
+            Err(_) => {
+                let _ = tx_event
+                    .send(Err(ApiError::Stream("idle timeout waiting for SSE".into())))
+                    .await;
+                return;
+            }
+        };
+
+        trace!("Copilot chat SSE event: {}", &sse.data);
+
+        if sse.data == "[DONE]" {
+            if !completed {
+                // Ensure item is always opened before OutputItemDone.
+                if !item_opened {
+                    let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message {
+                            id: Some(response_id.clone()),
+                            role: "assistant".to_string(),
+                            content: vec![],
+                            end_turn: None,
+                            phase: None,
+                        })))
+                        .await;
+                }
+                let message = ResponseItem::Message {
+                    id: Some(response_id.clone()),
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText { text: text.clone() }],
+                    end_turn: Some(true),
+                    phase: None,
+                };
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::OutputItemDone(message)))
+                    .await;
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::Completed {
+                        response_id: response_id.clone(),
+                        token_usage: None,
+                    }))
+                    .await;
+            }
+            return;
+        }
+
+        let chunk: ChatCompletionsChunk = match serde_json::from_str(&sse.data) {
+            Ok(c) => c,
+            Err(err) => {
+                debug!("failed to parse chat completions SSE chunk: {err}");
+                continue;
+            }
+        };
+
+        if let Some(id) = chunk.id {
+            if response_id.is_empty() {
+                response_id = id;
+            }
+        }
+
+        let choices = chunk.choices.unwrap_or_default();
+        let choice = match choices.into_iter().next() {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // --- Accumulate tool-call fragments ---
+        if let Some(ref delta) = choice.delta {
+            for tc in &delta.tool_calls {
+                has_tool_calls = true;
+                let entry = tool_calls_by_index.entry(tc.index).or_default();
+                if let Some(ref id) = tc.id {
+                    entry.id = id.clone();
+                }
+                if let Some(ref func) = tc.function {
+                    if let Some(ref name) = func.name {
+                        entry.name = name.clone();
+                    }
+                    if let Some(ref args) = func.arguments {
+                        entry.arguments.push_str(args);
+                    }
+                }
+            }
+        }
+
+        // --- Accumulate text fragments ---
+        if let Some(ref delta) = choice.delta {
+            if let Some(ref content) = delta.content {
+                if !content.is_empty() {
+                    if !item_opened {
+                        item_opened = true;
+                        let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
+                        let _ = tx_event
+                            .send(Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message {
+                                id: Some(response_id.clone()),
+                                role: "assistant".to_string(),
+                                content: vec![],
+                                end_turn: None,
+                                phase: None,
+                            })))
+                            .await;
+                    }
+                    text.push_str(content);
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::OutputTextDelta(content.clone())))
+                        .await;
+                }
+            }
+        }
+
+        if let Some(finish) = choice.finish_reason {
+            match finish.as_str() {
+                "tool_calls" => {
+                    completed = true;
+                    // Emit Created once for the turn.
+                    let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
+
+                    // Emit one OutputItemAdded + OutputItemDone per tool call,
+                    // ordered by index.
+                    let mut indices: Vec<usize> = tool_calls_by_index.keys().copied().collect();
+                    indices.sort_unstable();
+                    for idx in indices {
+                        let tc = tool_calls_by_index.remove(&idx).unwrap_or_default();
+                        // Use the index as a tie-breaker for call_id when the
+                        // model did not supply one (should not happen in practice).
+                        let call_id = if tc.id.is_empty() {
+                            format!("call_{idx}")
+                        } else {
+                            tc.id.clone()
+                        };
+                        let item = ResponseItem::FunctionCall {
+                            id: None,
+                            name: tc.name.clone(),
+                            namespace: None,
+                            arguments: tc.arguments.clone(),
+                            call_id: call_id.clone(),
+                        };
+                        let _ = tx_event
+                            .send(Ok(ResponseEvent::OutputItemAdded(item.clone())))
+                            .await;
+                        let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                    }
+
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::Completed {
+                            response_id: response_id.clone(),
+                            token_usage: None,
+                        }))
+                        .await;
+                }
+                "stop" | "end_turn" => {
+                    completed = true;
+                    // Ensure item is always opened even if there were no content deltas.
+                    if !item_opened {
+                        item_opened = true;
+                        let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
+                        let _ = tx_event
+                            .send(Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message {
+                                id: Some(response_id.clone()),
+                                role: "assistant".to_string(),
+                                content: vec![],
+                                end_turn: None,
+                                phase: None,
+                            })))
+                            .await;
+                    }
+                    let message = ResponseItem::Message {
+                        id: Some(response_id.clone()),
+                        role: "assistant".to_string(),
+                        content: vec![ContentItem::OutputText { text: text.clone() }],
+                        end_turn: Some(true),
+                        phase: None,
+                    };
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::OutputItemDone(message)))
+                        .await;
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::Completed {
+                            response_id: response_id.clone(),
+                            token_usage: None,
+                        }))
+                        .await;
+                    // Continue draining until [DONE] so we don't leave the stream open.
+                }
+                other => {
+                    debug!("unhandled finish_reason: {other}");
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::chat_messages_from_input;
@@ -227,6 +674,8 @@ mod tests {
     use bytes::Bytes;
     use codex_client::TransportError;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputBody;
+    use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
@@ -320,6 +769,52 @@ mod tests {
         }
     }
 
+    /// Fixture with a single tool call (shell command).
+    /// Verifies that finish_reason == "tool_calls" produces the correct
+    /// Created -> OutputItemAdded(FunctionCall) -> OutputItemDone(FunctionCall) -> Completed sequence.
+    #[tokio::test]
+    async fn parses_tool_call_sse_fixture() {
+        let body = concat!(
+            // First chunk: tool call id + name
+            "data: {\"id\":\"resp-1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"function\":{\"name\":\"shell\",\"arguments\":\"\"}}]}}]}\n\n",
+            // Second chunk: arguments fragment
+            "data: {\"id\":\"resp-1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"cmd\\\":\\\"echo hi\\\"}\"}}]}}]}\n\n",
+            // Finish chunk
+            "data: {\"id\":\"resp-1\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"delta\":{}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let events = collect_events(body).await;
+        let ok_events: Vec<ResponseEvent> = events.into_iter().map(|r| r.unwrap()).collect();
+
+        assert!(
+            matches!(ok_events[0], ResponseEvent::Created),
+            "first event must be Created"
+        );
+        assert!(
+            matches!(
+                &ok_events[1],
+                ResponseEvent::OutputItemAdded(ResponseItem::FunctionCall { name, call_id, .. })
+                    if name == "shell" && call_id == "call_abc"
+            ),
+            "second event must be OutputItemAdded(FunctionCall shell), got {:?}",
+            ok_events[1]
+        );
+        assert!(
+            matches!(
+                &ok_events[2],
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { name, arguments, call_id, .. })
+                    if name == "shell" && call_id == "call_abc" && arguments.contains("echo hi")
+            ),
+            "third event must be OutputItemDone(FunctionCall shell with args), got {:?}",
+            ok_events[2]
+        );
+        assert!(
+            matches!(ok_events[3], ResponseEvent::Completed { .. }),
+            "fourth event must be Completed"
+        );
+    }
+
     #[test]
     fn developer_messages_move_to_system_and_do_not_leak_into_messages() {
         let input = vec![
@@ -349,10 +844,10 @@ mod tests {
         assert_eq!(messages[0].role, "system");
         assert_eq!(
             messages[0].content,
-            "Base instructions\n\nFollow repo policy"
+            Some("Base instructions\n\nFollow repo policy".to_string())
         );
         assert_eq!(messages[1].role, "user");
-        assert_eq!(messages[1].content, "hey");
+        assert_eq!(messages[1].content, Some("hey".to_string()));
     }
 
     #[test]
@@ -372,212 +867,53 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, "user");
     }
-}
 
-pub fn spawn_anthropic_stream(
-    stream_response: StreamResponse,
-    idle_timeout: Duration,
-    telemetry: Option<Arc<dyn SseTelemetry>>,
-) -> ResponseStream {
-    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
-    tokio::spawn(async move {
-        process_anthropic_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
-    });
-    ResponseStream { rx_event }
-}
+    #[test]
+    fn function_call_and_output_produce_correct_messages() {
+        let input = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "run it".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{\"cmd\":\"echo hi\"}".to_string(),
+                call_id: "call_1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call_1".to_string(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::Text("hi\n".to_string()),
+                    success: Some(true),
+                },
+            },
+        ];
 
-/// Deserialised Chat Completions SSE chunk (streaming delta).
-#[derive(Debug, Deserialize)]
-struct ChatCompletionsChunk {
-    id: Option<String>,
-    choices: Option<Vec<ChatChoice>>,
-}
+        let messages = chat_messages_from_input(input, String::new());
 
-#[derive(Debug, Deserialize)]
-struct ChatChoice {
-    delta: Option<ChatDelta>,
-    finish_reason: Option<String>,
-}
+        // user, assistant(tool_calls), tool
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[1].role, "assistant");
+        assert!(messages[1].content.is_none());
+        assert_eq!(messages[1].tool_calls.len(), 1);
+        assert_eq!(messages[1].tool_calls[0].id, "call_1");
+        assert_eq!(messages[1].tool_calls[0].function.name, "shell");
+        assert_eq!(messages[2].role, "tool");
+        assert_eq!(messages[2].tool_call_id, Some("call_1".to_string()));
+        assert_eq!(messages[2].content, Some("hi\n".to_string()));
+    }
 
-#[derive(Debug, Deserialize)]
-struct ChatDelta {
-    content: Option<String>,
-}
-
-/// Processes a GitHub Copilot Chat Completions SSE stream for Claude models.
-///
-/// The wire format is standard OpenAI streaming:
-/// - Each `data:` line carries a `ChatCompletionsChunk` JSON object.
-/// - `choices[0].delta.content` carries incremental text.
-/// - `choices[0].finish_reason == "stop"` signals end-of-turn.
-/// - The final sentinel `data: [DONE]` marks stream close.
-///
-/// Event sequence emitted to match what `codex.rs` expects:
-/// 1. `Created`
-/// 2. `OutputItemAdded` (empty assistant message - initialises `active_item`)
-/// 3. `OutputTextDelta` (one per content chunk)
-/// 4. `OutputItemDone` (full assembled message)
-/// 5. `Completed`
-pub async fn process_anthropic_sse(
-    stream: codex_client::ByteStream,
-    tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
-    idle_timeout: Duration,
-    telemetry: Option<Arc<dyn SseTelemetry>>,
-) {
-    let mut stream = stream.eventsource();
-    let mut response_id = String::new();
-    let mut text = String::new();
-    let mut item_opened = false;
-    let mut completed = false;
-
-    loop {
-        let start = Instant::now();
-        let response = timeout(idle_timeout, stream.next()).await;
-        if let Some(t) = telemetry.as_ref() {
-            t.on_sse_poll(&response, start.elapsed());
-        }
-        let sse = match response {
-            Ok(Some(Ok(sse))) => sse,
-            Ok(Some(Err(e))) => {
-                let _ = tx_event.send(Err(ApiError::Stream(e.to_string()))).await;
-                return;
-            }
-            Ok(None) => {
-                if !completed {
-                    let _ = tx_event
-                        .send(Err(ApiError::Stream(
-                            "stream closed before completion".into(),
-                        )))
-                        .await;
-                }
-                return;
-            }
-            Err(_) => {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream("idle timeout waiting for SSE".into())))
-                    .await;
-                return;
-            }
-        };
-
-        trace!("Copilot chat SSE event: {}", &sse.data);
-
-        if sse.data == "[DONE]" {
-            if !completed {
-                // Ensure item is always opened before OutputItemDone.
-                if !item_opened {
-                    let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message {
-                            id: Some(response_id.clone()),
-                            role: "assistant".to_string(),
-                            content: vec![],
-                            end_turn: None,
-                            phase: None,
-                        })))
-                        .await;
-                }
-                let message = ResponseItem::Message {
-                    id: Some(response_id.clone()),
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::OutputText { text: text.clone() }],
-                    end_turn: Some(true),
-                    phase: None,
-                };
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::OutputItemDone(message)))
-                    .await;
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::Completed {
-                        response_id: response_id.clone(),
-                        token_usage: None,
-                    }))
-                    .await;
-            }
-            return;
-        }
-
-        let chunk: ChatCompletionsChunk = match serde_json::from_str(&sse.data) {
-            Ok(c) => c,
-            Err(err) => {
-                debug!("failed to parse chat completions SSE chunk: {err}");
-                continue;
-            }
-        };
-
-        if let Some(id) = chunk.id {
-            if response_id.is_empty() {
-                response_id = id;
-            }
-        }
-
-        let choices = chunk.choices.unwrap_or_default();
-        let choice = match choices.into_iter().next() {
-            Some(c) => c,
-            None => continue,
-        };
-
-        // On first content chunk: emit Created + OutputItemAdded to initialise
-        // `active_item` in the codex state machine before any text deltas.
-        if let Some(ref delta) = choice.delta {
-            if let Some(ref content) = delta.content {
-                if !content.is_empty() {
-                    if !item_opened {
-                        item_opened = true;
-                        let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
-                        let _ = tx_event
-                            .send(Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message {
-                                id: Some(response_id.clone()),
-                                role: "assistant".to_string(),
-                                content: vec![],
-                                end_turn: None,
-                                phase: None,
-                            })))
-                            .await;
-                    }
-                    text.push_str(content);
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::OutputTextDelta(content.clone())))
-                        .await;
-                }
-            }
-        }
-
-        if let Some(finish) = choice.finish_reason {
-            if finish == "stop" || finish == "end_turn" {
-                completed = true;
-                // Ensure item is always opened even if there were no content deltas.
-                if !item_opened {
-                    item_opened = true;
-                    let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::OutputItemAdded(ResponseItem::Message {
-                            id: Some(response_id.clone()),
-                            role: "assistant".to_string(),
-                            content: vec![],
-                            end_turn: None,
-                            phase: None,
-                        })))
-                        .await;
-                }
-                let message = ResponseItem::Message {
-                    id: Some(response_id.clone()),
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::OutputText { text: text.clone() }],
-                    end_turn: Some(true),
-                    phase: None,
-                };
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::OutputItemDone(message)))
-                    .await;
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::Completed {
-                        response_id: response_id.clone(),
-                        token_usage: None,
-                    }))
-                    .await;
-                // Continue draining until [DONE] so we don't leave the stream open.
-            }
-        }
+    #[test]
+    fn tool_spec_function_serializes_to_chat_completions_format() {
+        // This test lives in codex-tools where ToolSpec and JsonSchema are
+        // available. See tools/src/tool_spec_tests.rs.
     }
 }
