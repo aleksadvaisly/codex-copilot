@@ -34,6 +34,12 @@ pub struct AuthDotJson {
     #[serde(rename = "OPENAI_API_KEY")]
     pub openai_api_key: Option<String>,
 
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub provider_api_keys: HashMap<String, String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_provider_id: Option<String>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenData>,
 

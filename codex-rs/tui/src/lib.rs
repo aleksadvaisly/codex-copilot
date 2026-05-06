@@ -41,6 +41,7 @@ use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
+use codex_login::GEMINI_API_PROVIDER_ID;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
 use codex_model_provider_info::GITHUB_COPILOT_PROVIDER_ID;
@@ -1090,6 +1091,7 @@ async fn run_ratatui_app(
     let mut trust_decision_was_made = false;
     let login_status = if initial_config.model_provider.requires_openai_auth
         || initial_config.model_provider_id == GITHUB_COPILOT_PROVIDER_ID
+        || initial_config.model_provider_id == GEMINI_API_PROVIDER_ID
     {
         let Some(app_server) = app_server.as_mut() else {
             unreachable!("app server should exist when auth is required");
@@ -1662,6 +1664,7 @@ async fn get_login_status(
 ) -> color_eyre::Result<LoginStatus> {
     if !config.model_provider.requires_openai_auth
         && config.model_provider_id != GITHUB_COPILOT_PROVIDER_ID
+        && config.model_provider_id != GEMINI_API_PROVIDER_ID
     {
         return Ok(LoginStatus::NotAuthenticated);
     }
@@ -1736,6 +1739,7 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
     // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
     if !config.model_provider.requires_openai_auth
         && config.model_provider_id != GITHUB_COPILOT_PROVIDER_ID
+        && config.model_provider_id != GEMINI_API_PROVIDER_ID
     {
         return false;
     }

@@ -16,6 +16,8 @@ async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("test-key".to_string()),
+        provider_api_keys: std::collections::HashMap::new(),
+        api_key_provider_id: None,
         tokens: None,
         last_refresh: Some(Utc::now()),
     };
@@ -36,6 +38,8 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("test-key".to_string()),
+        provider_api_keys: std::collections::HashMap::new(),
+        api_key_provider_id: None,
         tokens: None,
         last_refresh: Some(Utc::now()),
     };
@@ -58,6 +62,8 @@ fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
+        provider_api_keys: std::collections::HashMap::new(),
+        api_key_provider_id: None,
         tokens: None,
         last_refresh: None,
     };
@@ -81,6 +87,8 @@ fn ephemeral_storage_save_load_delete_is_in_memory_only() -> anyhow::Result<()> 
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-ephemeral".to_string()),
+        provider_api_keys: std::collections::HashMap::new(),
+        api_key_provider_id: None,
         tokens: None,
         last_refresh: Some(Utc::now()),
     };
@@ -174,6 +182,8 @@ fn auth_with_prefix(prefix: &str) -> AuthDotJson {
     AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some(format!("{prefix}-api-key")),
+        provider_api_keys: std::collections::HashMap::new(),
+        api_key_provider_id: None,
         tokens: Some(TokenData {
             id_token: id_token_with_prefix(prefix),
             access_token: format!("{prefix}-access"),
@@ -195,6 +205,8 @@ fn keyring_auth_storage_load_returns_deserialized_auth() -> anyhow::Result<()> {
     let expected = AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("sk-test".to_string()),
+        provider_api_keys: std::collections::HashMap::new(),
+        api_key_provider_id: None,
         tokens: None,
         last_refresh: None,
     };
@@ -232,6 +244,8 @@ fn keyring_auth_storage_save_persists_and_removes_fallback_file() -> anyhow::Res
     let auth = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
+        provider_api_keys: std::collections::HashMap::new(),
+        api_key_provider_id: None,
         tokens: Some(TokenData {
             id_token: Default::default(),
             access_token: "access".to_string(),

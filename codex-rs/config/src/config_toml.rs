@@ -30,6 +30,7 @@ use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_model_provider_info::GEMINI_API_PROVIDER_ID;
 use codex_model_provider_info::GITHUB_COPILOT_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -57,9 +58,10 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 
-const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
+const RESERVED_MODEL_PROVIDER_IDS: [&str; 5] = [
     OPENAI_PROVIDER_ID,
     GITHUB_COPILOT_PROVIDER_ID,
+    GEMINI_API_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];

@@ -964,6 +964,8 @@ mod tests {
         AuthDotJson {
             auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: None,
+            provider_api_keys: std::collections::HashMap::new(),
+            api_key_provider_id: None,
             tokens: Some(TokenData {
                 id_token: parse_chatgpt_jwt_claims(&fake_jwt).expect("fake jwt should parse"),
                 access_token: access_token.to_string(),

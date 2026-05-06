@@ -211,6 +211,13 @@ fn test_built_in_model_providers_include_github_copilot() {
 }
 
 #[test]
+fn test_built_in_model_providers_include_gemini_api() {
+    let providers = built_in_model_providers(/* openai_base_url */ None);
+
+    assert!(providers.contains_key(GEMINI_API_PROVIDER_ID));
+}
+
+#[test]
 fn test_built_in_github_copilot_provider_metadata() {
     let providers = built_in_model_providers(/* openai_base_url */ None);
     let provider = providers
@@ -240,4 +247,29 @@ fn test_built_in_github_copilot_provider_metadata() {
             .map(String::as_str),
         Some("vscode-chat")
     );
+}
+
+#[test]
+fn test_built_in_gemini_api_provider_metadata() {
+    let providers = built_in_model_providers(/* openai_base_url */ None);
+    let provider = providers
+        .get(GEMINI_API_PROVIDER_ID)
+        .expect("gemini-api-beta provider should exist");
+
+    assert_eq!(provider.name, "Gemini API (beta)");
+    assert_eq!(
+        provider.base_url.as_deref(),
+        Some("https://generativelanguage.googleapis.com/v1beta")
+    );
+    assert_eq!(provider.wire_api, WireApi::Gemini);
+    assert!(!provider.requires_openai_auth);
+    assert!(!provider.supports_websockets);
+    assert_eq!(provider.auth, None);
+}
+
+#[test]
+fn test_built_in_gemini_api_provider_is_native_gemini_api() {
+    let provider = ModelProviderInfo::create_gemini_api_provider();
+
+    assert!(provider.is_native_gemini_api());
 }

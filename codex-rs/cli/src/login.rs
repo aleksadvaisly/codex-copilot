@@ -12,9 +12,11 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
+use codex_login::GEMINI_API_PROVIDER_ID;
 use codex_login::ServerOptions;
 use codex_login::load_github_copilot_auth;
 use codex_login::login_with_api_key;
+use codex_login::login_with_api_key_for_provider;
 use codex_login::logout;
 use codex_login::logout_github_copilot;
 use codex_login::run_device_code_login;
@@ -204,11 +206,22 @@ pub async fn run_login_with_api_key(
         std::process::exit(1);
     }
 
-    match login_with_api_key(
-        &config.codex_home,
-        &api_key,
-        config.cli_auth_credentials_store_mode,
-    ) {
+    let login_result = if config.model_provider_id == GEMINI_API_PROVIDER_ID {
+        login_with_api_key_for_provider(
+            &config.codex_home,
+            GEMINI_API_PROVIDER_ID,
+            &api_key,
+            config.cli_auth_credentials_store_mode,
+        )
+    } else {
+        login_with_api_key(
+            &config.codex_home,
+            &api_key,
+            config.cli_auth_credentials_store_mode,
+        )
+    };
+
+    match login_result {
         Ok(_) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
@@ -224,9 +237,7 @@ pub fn read_api_key_from_stdin() -> String {
     let mut stdin = std::io::stdin();
 
     if stdin.is_terminal() {
-        eprintln!(
-            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
-        );
+        eprintln!("--with-api-key expects the API key on stdin. Pipe the key instead.");
         std::process::exit(1);
     }
 

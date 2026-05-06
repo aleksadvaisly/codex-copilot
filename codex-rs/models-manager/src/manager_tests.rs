@@ -874,6 +874,12 @@ fn cache_filename_is_provider_specific_for_github_copilot() {
         name: "GitHub Copilot".into(),
         ..provider_for("https://api.githubcopilot.com".to_string())
     };
+    let gemini_provider = ModelProviderInfo {
+        name: "Gemini API (beta)".into(),
+        base_url: Some("https://generativelanguage.googleapis.com/v1beta".into()),
+        wire_api: WireApi::Gemini,
+        ..provider_for("https://example.test".to_string())
+    };
 
     assert_eq!(
         cache_filename_for_provider(&default_provider),
@@ -882,5 +888,9 @@ fn cache_filename_is_provider_specific_for_github_copilot() {
     assert_eq!(
         cache_filename_for_provider(&copilot_provider),
         "models_cache_github_copilot.json"
+    );
+    assert_eq!(
+        cache_filename_for_provider(&gemini_provider),
+        "models_cache_gemini_api.json"
     );
 }

@@ -15,6 +15,9 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -23,11 +26,13 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WriteStatus;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::GitHubCopilotAuth;
 use codex_login::login_with_api_key;
@@ -910,6 +915,106 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     pretty_assertions::assert_eq!(payload.plan_type, None);
 
     assert!(codex_home.path().join("auth.json").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_api_key_uses_requested_provider() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_login_account_api_key_request_for_provider(
+            "gemini-test-key",
+            Some(codex_login::GEMINI_API_PROVIDER_ID),
+        )
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(resp)?;
+    assert_eq!(login, LoginAccountResponse::ApiKey {});
+
+    let auth_json = std::fs::read_to_string(codex_home.path().join("auth.json"))?;
+    let auth: codex_login::AuthDotJson = serde_json::from_str(&auth_json)?;
+    assert_eq!(
+        auth.api_key_provider_id,
+        Some(codex_login::GEMINI_API_PROVIDER_ID.to_string())
+    );
+    assert_eq!(
+        auth.provider_api_keys
+            .get(codex_login::GEMINI_API_PROVIDER_ID),
+        Some(&"gemini-test-key".to_string())
+    );
+    assert_eq!(auth.openai_api_key, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_account_uses_reloaded_config_after_switching_to_gemini_provider() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let login_id = mcp
+        .send_login_account_api_key_request_for_provider(
+            "gemini-test-key",
+            Some(codex_login::GEMINI_API_PROVIDER_ID),
+        )
+        .await?;
+    let login_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(login_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(login_resp)?;
+    assert_eq!(login, LoginAccountResponse::ApiKey {});
+
+    let batch_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "model_provider".to_string(),
+                value: json!(codex_login::GEMINI_API_PROVIDER_ID),
+                merge_strategy: MergeStrategy::Replace,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let batch_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(batch_id)),
+    )
+    .await??;
+    let write: ConfigWriteResponse = to_response(batch_resp)?;
+    assert_eq!(write.status, WriteStatus::Ok);
+
+    let request_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: GetAccountResponse = to_response(resp)?;
+
+    let expected = GetAccountResponse {
+        account: Some(Account::ApiKey {}),
+        requires_openai_auth: false,
+    };
+    assert_eq!(received, expected);
     Ok(())
 }
 

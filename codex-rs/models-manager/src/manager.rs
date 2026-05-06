@@ -1,6 +1,7 @@
 use super::cache::ModelsCacheManager;
 use super::copilot_models::CopilotModelsResponse;
 use super::copilot_models::translate_models as translate_copilot_models;
+use super::gemini_models::fetch_models as fetch_gemini_models;
 use crate::collaboration_mode_presets::CollaborationModesConfig;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
@@ -16,11 +17,13 @@ use codex_feedback::emit_feedback_request_tags_with_auth_env;
 use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::auth_provider_from_auth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
 use codex_login::load_github_copilot_session;
+use codex_login::read_gemini_api_key_candidates_from_env;
 use codex_login::required_auth_manager_for_provider;
+use codex_login::resolve_provider_api_access;
+use codex_model_provider_info::GEMINI_API_PROVIDER_ID;
 use codex_model_provider_info::GITHUB_COPILOT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_otel::TelemetryAuthMode;
@@ -407,17 +410,40 @@ impl ModelsManager {
             return Ok(());
         }
 
-        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt)
-            && !is_github_copilot_provider(&self.provider)
-            && !self.provider.has_command_auth()
-        {
-            if matches!(
-                refresh_strategy,
-                RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
-            ) {
-                self.try_load_cache().await;
+        if self.provider.is_native_gemini_api() {
+            let has_native_gemini_auth =
+                self.auth_manager
+                    .auth_cached()
+                    .as_ref()
+                    .is_some_and(|auth| {
+                        auth.is_api_key_auth()
+                            && auth.api_key_provider_id() == Some(GEMINI_API_PROVIDER_ID)
+                    })
+                    || !read_gemini_api_key_candidates_from_env().is_empty();
+
+            if !has_native_gemini_auth {
+                if matches!(
+                    refresh_strategy,
+                    RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
+                ) {
+                    self.try_load_cache().await;
+                }
+                return Ok(());
             }
-            return Ok(());
+        } else {
+            let resolved =
+                resolve_provider_api_access(Some(self.auth_manager.clone()), &self.provider)
+                    .await?;
+
+            if !resolved.api_auth.auth_header_attached() {
+                if matches!(
+                    refresh_strategy,
+                    RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
+                ) {
+                    self.try_load_cache().await;
+                }
+                return Ok(());
+            }
         }
 
         match refresh_strategy {
@@ -447,12 +473,21 @@ impl ModelsManager {
             return self.fetch_and_update_copilot_models().await;
         }
 
+        if self.provider.is_native_gemini_api() {
+            return self.fetch_and_update_native_gemini_models().await;
+        }
+
+        self.fetch_and_update_openai_compatible_models().await
+    }
+
+    async fn fetch_and_update_openai_compatible_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
-        let auth = self.auth_manager.auth().await;
-        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let api_provider = self.provider.to_api_provider(auth_mode)?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
+        let resolved =
+            resolve_provider_api_access(Some(self.auth_manager.clone()), &self.provider).await?;
+        let api_provider = resolved.api_provider;
+        let api_auth = resolved.api_auth;
+        let auth_mode = resolved.auth.as_ref().map(CodexAuth::auth_mode);
         let auth_env = collect_auth_env_telemetry(
             &self.provider,
             self.auth_manager.codex_api_key_env_enabled(),
@@ -480,6 +515,48 @@ impl ModelsManager {
         *self.etag.write().await = etag.clone();
         self.cache_manager
             .persist_cache(&models, etag, client_version)
+            .await;
+        Ok(())
+    }
+
+    async fn fetch_and_update_native_gemini_models(&self) -> CoreResult<()> {
+        let _timer =
+            codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
+        let api_key = self
+            .auth_manager
+            .auth_cached()
+            .as_ref()
+            .and_then(|auth| {
+                if auth.is_api_key_auth()
+                    && auth.api_key_provider_id() == Some(GEMINI_API_PROVIDER_ID)
+                {
+                    auth.api_key().map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                read_gemini_api_key_candidates_from_env()
+                    .into_iter()
+                    .next()
+                    .map(|(_, api_key)| api_key)
+            })
+            .ok_or_else(|| CodexErr::InvalidRequest("Gemini API key is missing".to_string()))?;
+
+        let api_provider = self.provider.to_api_provider(Some(AuthMode::ApiKey))?;
+        let api_auth = codex_api::CoreAuthProvider {
+            token: Some(api_key),
+            account_id: None,
+            token_header_name: Some("x-goog-api-key"),
+            token_prefix: Some(""),
+        };
+        let models = fetch_gemini_models(&api_provider, &api_auth).await?;
+        // Gemini discovery is currently stateless; keep a cache entry so we can
+        // still bootstrap offline after a successful refresh.
+        self.apply_remote_models(models.clone()).await;
+        *self.etag.write().await = None;
+        self.cache_manager
+            .persist_cache(&models, None, crate::client_version_to_whole())
             .await;
         Ok(())
     }
@@ -682,6 +759,8 @@ impl ModelsManager {
 fn cache_filename_for_provider(provider: &ModelProviderInfo) -> String {
     if is_github_copilot_provider(provider) {
         "models_cache_github_copilot.json".to_string()
+    } else if provider.is_native_gemini_api() {
+        "models_cache_gemini_api.json".to_string()
     } else {
         MODEL_CACHE_FILE.to_string()
     }

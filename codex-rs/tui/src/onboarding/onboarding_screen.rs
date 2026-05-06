@@ -96,7 +96,12 @@ impl OnboardingScreen {
         )));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
-                Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
+                Some(ForcedLoginMethod::Api)
+                    if config.model_provider_id == codex_login::GEMINI_API_PROVIDER_ID =>
+                {
+                    SignInOption::GeminiApiKey
+                }
+                Some(ForcedLoginMethod::Api) => SignInOption::OpenAiApiKey,
                 _ => SignInOption::ChatGpt,
             };
             if let Some(app_server_request_handle) = app_server_request_handle {
@@ -108,6 +113,8 @@ impl OnboardingScreen {
                     login_status,
                     app_server_request_handle,
                     forced_login_method,
+                    model_provider_id: config.model_provider_id.clone(),
+                    model_provider_name: config.model_provider.name.clone(),
                     animations_enabled: config.animations,
                     animations_suppressed: std::cell::Cell::new(false),
                 }));

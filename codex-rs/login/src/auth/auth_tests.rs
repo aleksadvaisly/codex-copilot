@@ -124,6 +124,8 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         AuthDotJson {
             auth_mode: None,
             openai_api_key: None,
+            provider_api_keys: std::collections::HashMap::new(),
+            api_key_provider_id: None,
             tokens: Some(TokenData {
                 id_token: IdTokenInfo {
                     email: Some("user@example.com".to_string()),
@@ -172,6 +174,8 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
+        provider_api_keys: std::collections::HashMap::new(),
+        api_key_provider_id: None,
         tokens: None,
         last_refresh: None,
     };

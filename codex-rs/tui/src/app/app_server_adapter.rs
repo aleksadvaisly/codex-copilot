@@ -175,6 +175,7 @@ impl App {
                     status_account_display_from_auth_mode(
                         notification.auth_mode,
                         notification.plan_type,
+                        Some(self.chat_widget.config_ref().model_provider.name.as_str()),
                     ),
                     notification.plan_type,
                     matches!(

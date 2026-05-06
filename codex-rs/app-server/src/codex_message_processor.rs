@@ -10,7 +10,7 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::fuzzy_file_search::start_fuzzy_file_search_session;
-use crate::models::supported_models;
+use crate::models::supported_models_for_config;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -269,7 +269,7 @@ use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_login::complete_device_code_login;
 use codex_login::complete_github_copilot_device_code_login;
 use codex_login::default_client::set_default_client_residency_requirement;
-use codex_login::login_with_api_key;
+use codex_login::login_with_api_key_for_provider;
 use codex_login::request_device_code;
 use codex_login::request_github_copilot_device_code;
 use codex_login::run_login_server;
@@ -293,6 +293,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 
 const GITHUB_COPILOT_PROVIDER_ID: &str = "github-copilot";
+const GEMINI_API_PROVIDER_ID: &str = "gemini-api-beta";
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -1034,13 +1035,8 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::ModelList { request_id, params } => {
-                let outgoing = self.outgoing.clone();
-                let thread_manager = self.thread_manager.clone();
-                let request_id = to_connection_request_id(request_id);
-
-                tokio::spawn(async move {
-                    Self::list_models(outgoing, thread_manager, request_id, params).await;
-                });
+                self.list_models(to_connection_request_id(request_id), params)
+                    .await;
             }
             ClientRequest::ExperimentalFeatureList { request_id, params } => {
                 self.experimental_feature_list(to_connection_request_id(request_id), params)
@@ -1182,8 +1178,11 @@ impl CodexMessageProcessor {
 
     async fn login_v2(&self, request_id: ConnectionRequestId, params: LoginAccountParams) {
         match params {
-            LoginAccountParams::ApiKey { api_key } => {
-                self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
+            LoginAccountParams::ApiKey {
+                api_key,
+                provider_id,
+            } => {
+                self.login_api_key_v2(request_id, LoginApiKeyParams { api_key }, provider_id)
                     .await;
             }
             LoginAccountParams::Chatgpt => {
@@ -1223,6 +1222,7 @@ impl CodexMessageProcessor {
     async fn login_api_key_common(
         &self,
         params: &LoginApiKeyParams,
+        provider_id: Option<&str>,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
@@ -1247,8 +1247,11 @@ impl CodexMessageProcessor {
             }
         }
 
-        match login_with_api_key(
+        let provider_id = provider_id.unwrap_or(&self.config.model_provider_id);
+
+        match login_with_api_key_for_provider(
             &self.config.codex_home,
+            provider_id,
             &params.api_key,
             self.config.cli_auth_credentials_store_mode,
         ) {
@@ -1264,8 +1267,16 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_api_key_v2(&self, request_id: ConnectionRequestId, params: LoginApiKeyParams) {
-        match self.login_api_key_common(&params).await {
+    async fn login_api_key_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        params: LoginApiKeyParams,
+        provider_id: Option<String>,
+    ) {
+        match self
+            .login_api_key_common(&params, provider_id.as_deref())
+            .await
+        {
             Ok(()) => {
                 let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
                 self.outgoing.send_response(request_id, response).await;
@@ -1922,9 +1933,20 @@ impl CodexMessageProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
-        let requires_account =
-            requires_openai_auth || self.config.model_provider_id == GITHUB_COPILOT_PROVIDER_ID;
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let requires_openai_auth = config.model_provider.requires_openai_auth;
+        let requires_account = requires_openai_auth
+            || matches!(
+                config.model_provider_id.as_str(),
+                GITHUB_COPILOT_PROVIDER_ID | GEMINI_API_PROVIDER_ID
+            );
 
         if !requires_account {
             let response = GetAccountResponse {
@@ -1937,8 +1959,26 @@ impl CodexMessageProcessor {
 
         let account = match self.auth_manager.auth_cached() {
             Some(auth) => match auth.auth_mode() {
-                CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
+                CoreAuthMode::ApiKey => {
+                    let provider_matches = match auth.api_key_provider_id() {
+                        Some(provider_id) => provider_id == config.model_provider_id,
+                        None => config.model_provider_id == "openai",
+                    };
+                    provider_matches.then_some(Account::ApiKey {})
+                }
                 CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
+                    if matches!(config.model_provider_id.as_str(), GEMINI_API_PROVIDER_ID) {
+                        return self
+                            .outgoing
+                            .send_response(
+                                request_id,
+                                GetAccountResponse {
+                                    account: None,
+                                    requires_openai_auth,
+                                },
+                            )
+                            .await;
+                    }
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
@@ -5315,18 +5355,25 @@ impl CodexMessageProcessor {
         Ok((items, next_cursor))
     }
 
-    async fn list_models(
-        outgoing: Arc<OutgoingMessageSender>,
-        thread_manager: Arc<ThreadManager>,
-        request_id: ConnectionRequestId,
-        params: ModelListParams,
-    ) {
+    async fn list_models(&self, request_id: ConnectionRequestId, params: ModelListParams) {
         let ModelListParams {
             limit,
             cursor,
             include_hidden,
         } = params;
-        let models = supported_models(thread_manager, include_hidden.unwrap_or(false)).await;
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let models = supported_models_for_config(
+            &config,
+            self.auth_manager.clone(),
+            include_hidden.unwrap_or(false),
+        )
+        .await;
         let total = models.len();
 
         if total == 0 {
@@ -5334,7 +5381,7 @@ impl CodexMessageProcessor {
                 data: Vec::new(),
                 next_cursor: None,
             };
-            outgoing.send_response(request_id, response).await;
+            self.outgoing.send_response(request_id, response).await;
             return;
         }
 
@@ -5349,7 +5396,7 @@ impl CodexMessageProcessor {
                         message: format!("invalid cursor: {cursor}"),
                         data: None,
                     };
-                    outgoing.send_error(request_id, error).await;
+                    self.outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
@@ -5362,7 +5409,7 @@ impl CodexMessageProcessor {
                 message: format!("cursor {start} exceeds total models {total}"),
                 data: None,
             };
-            outgoing.send_error(request_id, error).await;
+            self.outgoing.send_error(request_id, error).await;
             return;
         }
 
@@ -5377,7 +5424,7 @@ impl CodexMessageProcessor {
             data: items,
             next_cursor,
         };
-        outgoing.send_response(request_id, response).await;
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn list_collaboration_modes(

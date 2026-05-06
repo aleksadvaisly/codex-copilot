@@ -100,6 +100,8 @@ mod tests {
         let auth = AuthDotJson {
             auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: None,
+            provider_api_keys: std::collections::HashMap::new(),
+            api_key_provider_id: None,
             tokens: Some(TokenData {
                 id_token: codex_login::token_data::parse_chatgpt_jwt_claims(&id_token)
                     .expect("id token should parse"),
@@ -152,6 +154,8 @@ mod tests {
             &AuthDotJson {
                 auth_mode: Some(AuthMode::ApiKey),
                 openai_api_key: Some("sk-test".to_string()),
+                provider_api_keys: std::collections::HashMap::new(),
+                api_key_provider_id: None,
                 tokens: None,
                 last_refresh: None,
             },

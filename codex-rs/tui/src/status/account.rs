@@ -5,5 +5,7 @@ pub(crate) enum StatusAccountDisplay {
         plan: Option<String>,
     },
     GitHubCopilot,
-    ApiKey,
+    ApiKey {
+        provider_name: String,
+    },
 }

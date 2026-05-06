@@ -570,9 +570,7 @@ impl HistoryCell for StatusHistoryCell {
                 (None, None) => "ChatGPT".to_string(),
             },
             StatusAccountDisplay::GitHubCopilot => "GitHub Copilot".to_string(),
-            StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
-            }
+            StatusAccountDisplay::ApiKey { provider_name } => api_key_status_text(provider_name),
         });
 
         let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
@@ -697,6 +695,18 @@ impl HistoryCell for StatusHistoryCell {
     }
 }
 
+fn api_key_status_text(provider_name: &str) -> String {
+    if provider_name == "OpenAI" {
+        return "OpenAI API key configured (run codex login to use ChatGPT)".to_string();
+    }
+
+    if provider_name.starts_with("Gemini") {
+        return "Gemini API key configured".to_string();
+    }
+
+    format!("{provider_name} API key configured")
+}
+
 fn format_model_provider(config: &Config) -> Option<String> {
     let provider = &config.model_provider;
     let name = provider.name.trim();
@@ -731,4 +741,26 @@ fn sanitize_base_url(raw: &str) -> Option<String> {
     url.set_query(None);
     url.set_fragment(None);
     Some(url.to_string().trim_end_matches('/').to_string()).filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::api_key_status_text;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn api_key_status_text_is_provider_aware() {
+        assert_eq!(
+            api_key_status_text("OpenAI"),
+            "OpenAI API key configured (run codex login to use ChatGPT)"
+        );
+        assert_eq!(
+            api_key_status_text("Gemini API (beta)"),
+            "Gemini API key configured"
+        );
+        assert_eq!(
+            api_key_status_text("Acme"),
+            "Acme API key configured".to_string()
+        );
+    }
 }

@@ -115,6 +115,8 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
         &AuthDotJson {
             auth_mode: Some(AuthMode::ApiKey),
             openai_api_key: Some("test-api-key".to_string()),
+            provider_api_keys: std::collections::HashMap::new(),
+            api_key_provider_id: None,
             tokens: None,
             last_refresh: None,
         },

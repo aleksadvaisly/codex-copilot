@@ -1,6 +1,5 @@
 ---
 source: tui/src/onboarding/auth.rs
-assertion_line: 1144
 expression: terminal.backend()
 ---
   Sign in with ChatGPT to use Codex as part of your paid plan
@@ -12,10 +11,13 @@ expression: terminal.backend()
   2. Sign in with GitHub Copilot
      Use your GitHub Copilot subscription
 
-  3. Sign in with Device Code
+  3. Sign in with OpenAI Device Code
      Sign in from another device with a one-time code
 
-  4. Provide your own API key
+  4. Provide your own OpenAI API Key
+     Pay for what you use
+
+  5. Provide your own Gemini API Key
      Pay for what you use
 
   Press Enter to continue

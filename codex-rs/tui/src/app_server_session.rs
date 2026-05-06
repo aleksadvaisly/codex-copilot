@@ -235,7 +235,9 @@ impl AppServerSession {
             Some(Account::ApiKey {}) => (
                 None,
                 Some(TelemetryAuthMode::ApiKey),
-                Some(StatusAccountDisplay::ApiKey),
+                Some(StatusAccountDisplay::ApiKey {
+                    provider_name: config.model_provider.name.clone(),
+                }),
                 None,
                 FeedbackAudience::External,
                 false,
@@ -816,9 +818,12 @@ impl AppServerSession {
 pub(crate) fn status_account_display_from_auth_mode(
     auth_mode: Option<AuthMode>,
     plan_type: Option<codex_protocol::account::PlanType>,
+    api_key_provider_name: Option<&str>,
 ) -> Option<StatusAccountDisplay> {
     match auth_mode {
-        Some(AuthMode::ApiKey) => Some(StatusAccountDisplay::ApiKey),
+        Some(AuthMode::ApiKey) => Some(StatusAccountDisplay::ApiKey {
+            provider_name: api_key_provider_name.unwrap_or("API").to_string(),
+        }),
         Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens) => {
             Some(StatusAccountDisplay::ChatGpt {
                 email: None,
@@ -1466,6 +1471,7 @@ mod tests {
         let business = status_account_display_from_auth_mode(
             Some(AuthMode::Chatgpt),
             Some(codex_protocol::account::PlanType::EnterpriseCbpUsageBased),
+            None,
         );
         assert!(matches!(
             business,
@@ -1478,6 +1484,7 @@ mod tests {
         let team = status_account_display_from_auth_mode(
             Some(AuthMode::Chatgpt),
             Some(codex_protocol::account::PlanType::SelfServeBusinessUsageBased),
+            None,
         );
         assert!(matches!(
             team,
@@ -1485,6 +1492,17 @@ mod tests {
                 email: None,
                 plan: Some(ref plan),
             }) if plan == "Business"
+        ));
+    }
+
+    #[test]
+    fn status_account_display_from_auth_mode_keeps_api_key_provider_name() {
+        let display =
+            status_account_display_from_auth_mode(Some(AuthMode::ApiKey), None, Some("Gemini"));
+
+        assert!(matches!(
+            display,
+            Some(StatusAccountDisplay::ApiKey { ref provider_name }) if provider_name == "Gemini"
         ));
     }
 }

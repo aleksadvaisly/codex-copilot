@@ -338,7 +338,7 @@ struct LoginCommand {
 
     #[arg(
         long = "with-api-key",
-        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+        help = "Read the API key from stdin (for example, `printenv GEMINI_API_KEY | codex login --with-api-key`)"
     )]
     with_api_key: bool,
 
@@ -905,7 +905,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                         .await;
                     } else if login_cli.api_key.is_some() {
                         eprintln!(
-                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                            "The --api-key flag is no longer supported. Pipe the key instead, for example `printenv GEMINI_API_KEY | codex login --with-api-key`."
                         );
                         std::process::exit(1);
                     } else if login_cli.with_api_key {

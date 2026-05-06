@@ -5,14 +5,19 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_models_cache;
 use app_test_support::write_models_cache_with_models;
+use chrono::Utc;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
+use codex_models_manager::client_version_to_whole;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -22,6 +27,8 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelWireApi;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -116,6 +123,42 @@ fn test_model_info(slug: &str, supported_in_api: bool) -> ModelInfo {
         supports_search_tool: false,
         wire_api: ModelWireApi::Responses,
     }
+}
+
+fn write_mock_provider_config(codex_home: &Path) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+model_provider = "mock_provider"
+
+[features]
+shell_snapshot = false
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "http://127.0.0.1:0/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#,
+    )
+}
+
+fn write_gemini_models_cache(codex_home: &Path, models: Vec<ModelInfo>) -> std::io::Result<()> {
+    let cache = json!({
+        "fetched_at": Utc::now(),
+        "etag": null,
+        "client_version": client_version_to_whole(),
+        "models": models,
+    });
+    std::fs::write(
+        codex_home.join("models_cache_gemini_api.json"),
+        serde_json::to_string_pretty(&cache)?,
+    )
 }
 
 #[tokio::test]
@@ -284,6 +327,69 @@ async fn list_models_pagination_works() -> Result<()> {
         "model pagination did not terminate after {} pages",
         expected_models.len()
     );
+}
+
+#[tokio::test]
+async fn list_models_uses_reloaded_config_after_switching_to_gemini_provider() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_mock_provider_config(codex_home.path())?;
+    write_models_cache(codex_home.path())?;
+    write_gemini_models_cache(
+        codex_home.path(),
+        vec![ModelInfo {
+            wire_api: ModelWireApi::Gemini,
+            ..test_model_info("gemini-2.5-pro", true)
+        }],
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let batch_id = mcp
+        .send_config_batch_write_request(ConfigBatchWriteParams {
+            edits: vec![ConfigEdit {
+                key_path: "model_provider".to_string(),
+                value: json!(codex_login::GEMINI_API_PROVIDER_ID),
+                merge_strategy: MergeStrategy::Replace,
+            }],
+            file_path: None,
+            expected_version: None,
+            reload_user_config: true,
+        })
+        .await?;
+    let _: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(batch_id)),
+    )
+    .await??;
+
+    let request_id = mcp
+        .send_list_models_request(ModelListParams {
+            limit: Some(20),
+            cursor: None,
+            include_hidden: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let ModelListResponse {
+        data: items,
+        next_cursor,
+    } = to_response::<ModelListResponse>(response)?;
+
+    let gemini_model = items.iter().find(|item| item.model == "gemini-2.5-pro");
+    assert!(gemini_model.is_some());
+    assert_eq!(
+        gemini_model.map(|item| item.display_name.as_str()),
+        Some("gemini-2.5-pro")
+    );
+    assert!(next_cursor.is_none());
+    Ok(())
 }
 
 #[tokio::test]

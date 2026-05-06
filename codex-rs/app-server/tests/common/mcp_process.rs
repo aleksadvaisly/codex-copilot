@@ -905,9 +905,20 @@ impl McpProcess {
         &mut self,
         api_key: &str,
     ) -> anyhow::Result<i64> {
+        self.send_login_account_api_key_request_for_provider(api_key, /*provider_id*/ None)
+            .await
+    }
+
+    /// Send an `account/login/start` JSON-RPC request for API key login.
+    pub async fn send_login_account_api_key_request_for_provider(
+        &mut self,
+        api_key: &str,
+        provider_id: Option<&str>,
+    ) -> anyhow::Result<i64> {
         let params = serde_json::json!({
             "type": "apiKey",
             "apiKey": api_key,
+            "providerId": provider_id,
         });
         self.send_request("account/login/start", Some(params)).await
     }

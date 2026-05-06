@@ -33,6 +33,10 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+const GEMINI_API_PROVIDER_NAME: &str = "Gemini API (beta)";
+pub const GEMINI_API_PROVIDER_ID: &str = "gemini-api-beta";
+const GEMINI_API_BASE_URL_PREFIX: &str = "https://generativelanguage.googleapis.com";
+const GEMINI_API_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 const GITHUB_COPILOT_PROVIDER_NAME: &str = "GitHub Copilot";
 pub const GITHUB_COPILOT_PROVIDER_ID: &str = "github-copilot";
 const GITHUB_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
@@ -54,7 +58,9 @@ pub enum WireApi {
     Responses,
     /// Anthropic's Messages API exposed at `/v1/messages`.
     Anthropic,
-    /// Gemini models exposed through GitHub Copilot's Chat Completions gateway.
+    /// Gemini-family models. `github-copilot` still routes these through Chat
+    /// Completions today, while `gemini-api-beta` uses native Google Gemini
+    /// API endpoints.
     Gemini,
 }
 
@@ -216,6 +222,16 @@ impl ModelProviderInfo {
             .base_url
             .clone()
             .unwrap_or_else(|| default_base_url.to_string());
+        let base_url = if self.is_native_gemini_api() {
+            let normalized = base_url.trim_end_matches('/');
+            if normalized == GEMINI_API_BASE_URL_PREFIX {
+                format!("{normalized}/v1beta")
+            } else {
+                base_url
+            }
+        } else {
+            base_url
+        };
 
         let headers = self.build_header_map()?;
         let retry = ApiRetryConfig {
@@ -368,8 +384,40 @@ impl ModelProviderInfo {
         }
     }
 
+    pub fn create_gemini_api_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: GEMINI_API_PROVIDER_NAME.into(),
+            base_url: Some(GEMINI_API_BASE_URL.into()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::Gemini,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
+    }
+
+    pub fn is_native_gemini_api(&self) -> bool {
+        let Some(base_url) = self.base_url.as_deref() else {
+            return false;
+        };
+        let normalized = base_url.trim_end_matches('/');
+        self.wire_api == WireApi::Gemini
+            && (normalized == GEMINI_API_BASE_URL_PREFIX
+                || normalized == GEMINI_API_BASE_URL
+                || normalized.starts_with("https://generativelanguage.googleapis.com/v1beta/"))
     }
 
     pub fn has_command_auth(&self) -> bool {
@@ -400,6 +448,7 @@ pub fn built_in_model_providers(
             GITHUB_COPILOT_PROVIDER_ID,
             P::create_github_copilot_provider(),
         ),
+        (GEMINI_API_PROVIDER_ID, P::create_gemini_api_provider()),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
